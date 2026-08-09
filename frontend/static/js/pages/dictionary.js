@@ -189,7 +189,7 @@ function switcherProviders(lang) {
   return items;
 }
 
-function renderSwitcherInto(card, lang, activeName) {
+function renderSwitcherInto(card, lang, activeName, vocabState) {
   const list = switcherProviders(lang);
   // Remove any existing switcher before inserting a fresh one.
   const existing = card.querySelector(".result-provider-switcher");
@@ -201,12 +201,28 @@ function renderSwitcherInto(card, lang, activeName) {
     <button class="provider-switcher__nav" type="button" data-action="prev" aria-label="Previous provider" ${list.length < 2 ? "disabled" : ""}>‹</button>
     <div class="segmented" role="radiogroup" aria-label="Dictionary provider"></div>
     <button class="provider-switcher__nav" type="button" data-action="next" aria-label="Next provider" ${list.length < 2 ? "disabled" : ""}>›</button>
+    <div class="result-provider-switcher__vocab">${renderVocabControl(vocabState)}</div>
   `;
   card.insertBefore(bar, card.firstChild);
   const segments = bar.querySelector(".segmented");
   paintSegments(segments, list, activeName);
   bar.querySelector("[data-action='prev']").addEventListener("click", () => cycleProvider(list, lang, -1));
   bar.querySelector("[data-action='next']").addEventListener("click", () => cycleProvider(list, lang, 1));
+}
+
+function renderVocabControl(vocabState) {
+  if (vocabState && vocabState.inVocab === true && Number.isInteger(vocabState.leitnerBox)) {
+    const box = clampBox(vocabState.leitnerBox);
+    return `<span class="badge badge--ok" data-vocab-badge="in-box" data-box="${box}" title="This word is in box ${box}">Box ${box}</span>`;
+  }
+  return `<button type="button" class="btn btn--sm btn--ghost" data-action="add-to-vocab" title="Add this word to your vocabulary (box 1)">+ Add to vocab</button>`;
+}
+
+function clampBox(v) {
+  const n = Number(v);
+  if (!Number.isFinite(n) || n < 1) return 1;
+  if (n > 5) return 5;
+  return Math.round(n);
 }
 
 function paintSegments(segments, list, selectedName) {
@@ -377,8 +393,11 @@ async function doLookup(word, lang, providerOverride) {
     if (myToken !== lookupToken) return;
     lastLookup.word = word;
     lastLookup.lang = lang;
-    renderEntry(resultHost, cached.entry, cached.source, cached.word || word, lang);
-    maybeShowUndoToast(cached.word || word, lang);
+    renderEntry(resultHost, cached.entry, cached.source, cached.word || word, lang, {
+      inVocab: cached.inVocab === true,
+      leitnerBox: cached.leitnerBox ?? null,
+    });
+    maybeShowUndoToast(cached.word || word, lang, cached.autoAdded);
     return;
   }
 
@@ -403,12 +422,21 @@ async function doLookup(word, lang, providerOverride) {
     renderNoResult(resultHost, word, lang, data.suggestions || [], data.provider_errors || []);
     return;
   }
-  renderEntry(resultHost, data.entry, data.source, word, lang);
-  cache.set(lang, word, data.source, { entry: data.entry, word });
+  renderEntry(resultHost, data.entry, data.source, word, lang, {
+    inVocab: data.in_vocab === true,
+    leitnerBox: data.leitner_box ?? null,
+  });
+  cache.set(lang, word, data.source, {
+    entry: data.entry,
+    word,
+    autoAdded: !!data.auto_added,
+    inVocab: data.in_vocab === true,
+    leitnerBox: data.leitner_box ?? null,
+  });
   maybeShowUndoToast(word, lang, data.auto_added);
 }
 
-function renderEntry(host, entry, source, word, lang) {
+function renderEntry(host, entry, source, word, lang, vocabState) {
   const settings = store.get().settings || {};
   const html = renderWordCard(entry, {
     source,
@@ -422,7 +450,8 @@ function renderEntry(host, entry, source, word, lang) {
     </div>
   `;
   const card = host.querySelector(".card");
-  renderSwitcherInto(card, lang, source || null);
+  renderSwitcherInto(card, lang, source || null, vocabState);
+  bindVocabActions(card, { word, lang, entry, source, vocabState });
 }
 
 function renderNoResult(host, word, lang, suggestions, providerErrors) {
@@ -439,7 +468,8 @@ function renderNoResult(host, word, lang, suggestions, providerErrors) {
   bindSuggestionChips(host, lang);
   const card = host.querySelector(".card");
   // Highlight the LLM chip by default since AI has the broadest coverage.
-  renderSwitcherInto(card, lang, "llm");
+  // No vocab action on the no-result card — there's nothing to add.
+  renderSwitcherInto(card, lang, "llm", null);
 }
 
 function renderProviderErrors(errors) {
@@ -502,6 +532,80 @@ function maybeShowUndoToast(word, lang, autoAdded) {
       },
     }],
   });
+}
+
+function bindVocabActions(card, ctx) {
+  const addBtn = card.querySelector('[data-action="add-to-vocab"]');
+  if (!addBtn) return;
+  addBtn.addEventListener("click", async () => {
+    addBtn.disabled = true;
+    const original = addBtn.textContent;
+    addBtn.textContent = "Adding…";
+    const res = await api.post("/api/vocab/add-from-entry", {
+      lang: ctx.lang,
+      word: ctx.word,
+      source: ctx.source || "user",
+      pos: firstPos(ctx.entry),
+      glossary: firstGlossary(ctx.entry),
+      example: firstExample(ctx.entry),
+      explanation_primary: firstExplanation(ctx.entry, "primary"),
+      explanation_secondary: firstExplanation(ctx.entry, "secondary"),
+    });
+    if (!res.ok) {
+      toast({ title: "Couldn't add to vocab",
+              message: res.error || "unknown error",
+              variant: "error" });
+      addBtn.disabled = false;
+      addBtn.textContent = original;
+      return;
+    }
+    const box = (res.data && res.data.leitner_box) || 1;
+    // Swap the button for the box badge inside the Source row.
+    const slot = card.querySelector(".result-provider-switcher__vocab");
+    if (slot) slot.innerHTML = renderVocabControl({ inVocab: true, leitnerBox: box });
+    // Update the cache so the next render of the same word keeps the badge.
+    try {
+      const all = JSON.parse(localStorage.getItem("langlearn:dict:v1") || "{}");
+      for (const key of Object.keys(all)) {
+        if (key.endsWith(`:${ctx.lang}:${ctx.word.toLowerCase()}`)) {
+          const bySource = all[key].bySource || {};
+          for (const s of Object.keys(bySource)) {
+            bySource[s].inVocab = true;
+            bySource[s].leitnerBox = box;
+          }
+          all[key].bySource = bySource;
+        }
+      }
+      localStorage.setItem("langlearn:dict:v1", JSON.stringify(all));
+    } catch (e) { /* best-effort */ }
+    toast({ title: `Added "${ctx.word}" to box ${box}`,
+            message: "Source: dictionary lookup",
+            variant: "success",
+            ttl: 2200 });
+  });
+}
+
+function firstPos(entry) {
+  const senses = (entry && entry.senses) || [];
+  return (senses[0] && senses[0].pos) || "";
+}
+
+function firstGlossary(entry) {
+  const senses = (entry && entry.senses) || [];
+  const defs = (senses[0] && senses[0].definitions) || [];
+  return (defs[0] && defs[0].glossary) || "";
+}
+
+function firstExample(entry) {
+  const senses = (entry && entry.senses) || [];
+  const defs = (senses[0] && senses[0].definitions) || [];
+  return (defs[0] && defs[0].example) || null;
+}
+
+function firstExplanation(entry, key) {
+  const senses = (entry && entry.senses) || [];
+  const ex = (senses[0] && senses[0].explanations) || {};
+  return ex[key] || null;
 }
 
 function escapeHtml(s) {

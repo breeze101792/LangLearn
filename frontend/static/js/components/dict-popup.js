@@ -5,6 +5,7 @@
 import { api } from "../api.js";
 import { store } from "../state.js";
 import { cache } from "../cache.js";
+import { toast } from "./toast.js";
 import { renderWordCard } from "./word-card.js";
 
 const POPUP_ID = "dict-popup";
@@ -17,6 +18,8 @@ let activeWord = "";
 let activeLang = "";
 let activeSource = "";
 let activeProviders = [];
+let activeVocabState = { inVocab: false, leitnerBox: null };
+let activeEntry = null;
 let onDismissCb = null;
 
 function escapeHtml(s) {
@@ -80,6 +83,8 @@ export async function openDictPopup({ word, lang, onDismiss } = {}) {
   activeWord = w;
   activeLang = lg;
   activeSource = "";
+  activeVocabState = { inVocab: false, leitnerBox: null };
+  activeEntry = null;
   activeProviders = providerList(lg);
   showPopup();
   renderLoading(w);
@@ -308,6 +313,7 @@ function renderEntry(entry, source) {
     explanationSecondary: settings.explanation_secondary,
   });
   popupBody.innerHTML = `<div class="card">${html}</div>`;
+  activeEntry = entry;
   paintSwitcher(popupBody.querySelector(".card"), source || null);
 }
 
@@ -315,14 +321,28 @@ function paintSwitcher(card, activeName) {
   if (!card) return;
   const existing = card.querySelector(".result-provider-switcher");
   if (existing) existing.remove();
-  if (activeProviders.length < 2) return;
+  // Build the switcher whenever we have multiple providers. The vocab slot
+  // sits to the right of the segmented control; it shows the in-box badge
+  // when activeEntry is loaded, otherwise it's hidden (empty slot).
+  const showSwitcher = activeProviders.length >= 2;
+  if (!showSwitcher && !activeEntry) return;
   const bar = document.createElement("div");
   bar.className = "result-provider-switcher";
-  bar.innerHTML = `
-    <span class="result-provider-switcher__label">Source:</span>
-    <div class="segmented" role="radiogroup" aria-label="Dictionary provider"></div>
-  `;
+  const vocabHtml = activeEntry ? renderVocabControl(activeVocabState) : "";
+  if (showSwitcher) {
+    bar.innerHTML = `
+      <span class="result-provider-switcher__label">Source:</span>
+      <div class="segmented" role="radiogroup" aria-label="Dictionary provider"></div>
+      <div class="result-provider-switcher__vocab">${vocabHtml}</div>
+    `;
+  } else {
+    bar.innerHTML = `<div class="result-provider-switcher__vocab">${vocabHtml}</div>`;
+  }
   card.insertBefore(bar, card.firstChild);
+  if (!showSwitcher) {
+    bindVocabActions(card);
+    return;
+  }
   const segments = bar.querySelector(".segmented");
   segments.innerHTML = activeProviders.map((p) => {
     const active = (activeName || "") === p.name;
@@ -351,6 +371,97 @@ function paintSwitcher(card, activeName) {
       runLookup(activeWord, activeLang, name);
     });
   });
+  bindVocabActions(card);
+}
+
+function renderVocabControl(state) {
+  if (state && state.inVocab === true && Number.isInteger(state.leitnerBox)) {
+    const box = clampBox(state.leitnerBox);
+    return `<span class="badge badge--ok" data-vocab-badge="in-box" data-box="${box}" title="This word is in box ${box}">Box ${box}</span>`;
+  }
+  return `<button type="button" class="btn btn--sm btn--ghost" data-action="add-to-vocab" title="Add this word to your vocabulary (box 1)">+ Add to vocab</button>`;
+}
+
+function clampBox(v) {
+  const n = Number(v);
+  if (!Number.isFinite(n) || n < 1) return 1;
+  if (n > 5) return 5;
+  return Math.round(n);
+}
+
+function bindVocabActions(card) {
+  const addBtn = card.querySelector('[data-action="add-to-vocab"]');
+  if (!addBtn) return;
+  addBtn.addEventListener("click", async () => {
+    if (!activeEntry) return;
+    addBtn.disabled = true;
+    const original = addBtn.textContent;
+    addBtn.textContent = "Adding…";
+    const res = await api.post("/api/vocab/add-from-entry", {
+      lang: activeLang,
+      word: activeWord,
+      source: activeSource || "user",
+      pos: firstPos(activeEntry),
+      glossary: firstGlossary(activeEntry),
+      example: firstExample(activeEntry),
+      explanation_primary: firstExplanation(activeEntry, "primary"),
+      explanation_secondary: firstExplanation(activeEntry, "secondary"),
+    });
+    if (!res.ok) {
+      toast({ title: "Couldn't add to vocab",
+              message: res.error || "unknown error",
+              variant: "error" });
+      addBtn.disabled = false;
+      addBtn.textContent = original;
+      return;
+    }
+    const box = (res.data && res.data.leitner_box) || 1;
+    activeVocabState = { inVocab: true, leitnerBox: box };
+    const slot = card.querySelector(".result-provider-switcher__vocab");
+    if (slot) slot.innerHTML = renderVocabControl(activeVocabState);
+    // Update the cache so the next open of the same word keeps the badge.
+    try {
+      const all = JSON.parse(localStorage.getItem("langlearn:dict:v1") || "{}");
+      for (const key of Object.keys(all)) {
+        if (key.endsWith(`:${activeLang}:${activeWord.toLowerCase()}`)) {
+          const bySource = all[key].bySource || {};
+          for (const s of Object.keys(bySource)) {
+            bySource[s].inVocab = true;
+            bySource[s].leitnerBox = box;
+          }
+          all[key].bySource = bySource;
+        }
+      }
+      localStorage.setItem("langlearn:dict:v1", JSON.stringify(all));
+    } catch (e) { /* best-effort */ }
+    toast({ title: `Added "${activeWord}" to box ${box}`,
+            message: "Source: dictionary lookup",
+            variant: "success",
+            ttl: 2200 });
+  });
+}
+
+function firstPos(entry) {
+  const senses = (entry && entry.senses) || [];
+  return (senses[0] && senses[0].pos) || "";
+}
+
+function firstGlossary(entry) {
+  const senses = (entry && entry.senses) || [];
+  const defs = (senses[0] && senses[0].definitions) || [];
+  return (defs[0] && defs[0].glossary) || "";
+}
+
+function firstExample(entry) {
+  const senses = (entry && entry.senses) || [];
+  const defs = (senses[0] && senses[0].definitions) || [];
+  return (defs[0] && defs[0].example) || null;
+}
+
+function firstExplanation(entry, key) {
+  const senses = (entry && entry.senses) || [];
+  const ex = (senses[0] && senses[0].explanations) || {};
+  return ex[key] || null;
 }
 
 function renderLoadingPreservingSwitcher() {
@@ -386,6 +497,10 @@ async function runLookup(word, lang, providerOverride) {
   if (cached) {
     if (myToken !== lookupToken) return;
     activeSource = cached.source || "";
+    activeVocabState = {
+      inVocab: cached.inVocab === true,
+      leitnerBox: cached.leitnerBox ?? null,
+    };
     renderEntry(cached.entry, activeSource);
     return;
   }
@@ -415,8 +530,17 @@ async function runLookup(word, lang, providerOverride) {
     return;
   }
   activeSource = data.source || "";
+  activeVocabState = {
+    inVocab: data.in_vocab === true,
+    leitnerBox: data.leitner_box ?? null,
+  };
   renderEntry(data.entry, activeSource);
-  cache.set(lang, word, activeSource, { entry: data.entry, word });
+  cache.set(lang, word, activeSource, {
+    entry: data.entry,
+    word,
+    inVocab: activeVocabState.inVocab,
+    leitnerBox: activeVocabState.leitnerBox,
+  });
 }
 
 function dismiss() {

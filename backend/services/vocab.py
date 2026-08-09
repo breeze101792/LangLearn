@@ -129,6 +129,27 @@ def _evict_undo_locked() -> None:
             break
 
 
+def find_vocab_box(*, user_id: int, language: str, word: str) -> dict | None:
+    """Return the Leitner box for `(language, word)` or None if not in vocab.
+
+    The dictionary card uses this to decide whether to show an "Add to box 1"
+    button (no row) or the current box badge (row exists).
+    """
+    if not is_valid_lang(language):
+        raise ValueError("invalid language")
+    if not isinstance(word, str) or not word.strip():
+        return None
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT id, leitner_box FROM vocab_items "
+            "WHERE user_id=? AND language=? AND word=?",
+            (user_id, language, word.strip()[:200]),
+        ).fetchone()
+    if row is None:
+        return None
+    return {"id": row["id"], "leitner_box": int(row["leitner_box"])}
+
+
 def list_vocab(*, user_id: int, language: str, limit: int = 100, offset: int = 0,
                box: int | None = None) -> list[dict]:
     """List vocab rows for `language`, newest first.

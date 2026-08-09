@@ -350,3 +350,171 @@ def test_patch_vocab_endpoint_unknown_id(fresh):
     client = app.test_client()
     r = client.patch("/api/vocab/9999", json={"leitner_box": 2})
     assert r.status_code == 404
+
+
+# --- find_vocab_box service + GET /api/vocab/lookup -----------------------
+
+def test_find_vocab_box_returns_none_when_missing(fresh):
+    from backend.services import vocab as v
+    assert v.find_vocab_box(user_id=1, language="en", word="nope") is None
+
+
+def test_find_vocab_box_returns_id_and_box(fresh):
+    res = _seed_vocab(fresh, word="hola", lang="es")
+    from backend.services import vocab as v
+    out = v.find_vocab_box(user_id=1, language="es", word="hola")
+    assert out == {"id": res["id"], "leitner_box": 1}
+
+
+def test_find_vocab_box_reflects_promotion(fresh):
+    res = _seed_vocab(fresh, word="hola", lang="es")
+    from backend.services import vocab as v
+    v.set_box(user_id=1, vocab_id=res["id"], box=4)
+    out = v.find_vocab_box(user_id=1, language="es", word="hola")
+    assert out == {"id": res["id"], "leitner_box": 4}
+
+
+def test_find_vocab_box_invalid_lang_raises(fresh):
+    from backend.services import vocab as v
+    with pytest.raises(ValueError):
+        v.find_vocab_box(user_id=1, language="!!", word="x")
+
+
+def test_lookup_vocab_endpoint_misses(fresh):
+    from backend.app import create_app
+    app = create_app()
+    client = app.test_client()
+    r = client.get("/api/vocab/lookup?lang=en&word=ghost")
+    assert r.status_code == 200
+    body = r.get_json()
+    assert body["ok"] is True
+    assert body["data"]["in_vocab"] is False
+    assert body["data"]["leitner_box"] is None
+
+
+def test_lookup_vocab_endpoint_hit(fresh):
+    res = _seed_vocab(fresh, word="hola", lang="es")
+    from backend.app import create_app
+    app = create_app()
+    client = app.test_client()
+    r = client.get("/api/vocab/lookup?lang=es&word=hola")
+    assert r.status_code == 200
+    body = r.get_json()
+    assert body["data"]["in_vocab"] is True
+    assert body["data"]["leitner_box"] == 1
+    assert body["data"]["vocab_id"] == res["id"]
+
+
+def test_lookup_vocab_endpoint_bad_lang(fresh):
+    from backend.app import create_app
+    app = create_app()
+    client = app.test_client()
+    r = client.get("/api/vocab/lookup?lang=!!&word=hola")
+    assert r.status_code == 400
+
+
+def test_lookup_vocab_endpoint_missing_word(fresh):
+    from backend.app import create_app
+    app = create_app()
+    client = app.test_client()
+    r = client.get("/api/vocab/lookup?lang=en")
+    assert r.status_code == 400
+
+
+# --- POST /api/vocab/add-from-entry --------------------------------------
+
+def test_add_from_entry_creates_row_at_box_1(fresh):
+    from backend.app import create_app
+    app = create_app()
+    client = app.test_client()
+    r = client.post("/api/vocab/add-from-entry", json={
+        "lang": "en", "word": "banana",
+        "source": "llm", "pos": "noun",
+        "glossary": "a yellow fruit",
+        "example": "I ate a banana.",
+        "explanation_primary": "fruit",
+    })
+    assert r.status_code == 200
+    body = r.get_json()
+    assert body["data"]["created"] is True
+    assert body["data"]["leitner_box"] == 1
+    from backend.services import vocab as v
+    items = v.list_vocab(user_id=1, language="en")
+    assert items[0]["word"] == "banana"
+    assert items[0]["leitner_box"] == 1
+
+
+def test_add_from_entry_refreshes_existing_row(fresh):
+    _seed_vocab(fresh, word="banana", lang="en", glossary="old")
+    # Promote to box 3 first.
+    from backend.services import vocab as v
+    items = v.list_vocab(user_id=1, language="en")
+    v.set_box(user_id=1, vocab_id=items[0]["id"], box=3)
+
+    from backend.app import create_app
+    app = create_app()
+    client = app.test_client()
+    r = client.post("/api/vocab/add-from-entry", json={
+        "lang": "en", "word": "banana",
+        "source": "wordnet", "glossary": "new",
+    })
+    assert r.status_code == 200
+    body = r.get_json()
+    assert body["data"]["created"] is False  # refresh, not create
+    assert body["data"]["leitner_box"] == 3  # box preserved
+    items = v.list_vocab(user_id=1, language="en")
+    assert items[0]["glossary"] == "new"
+    assert items[0]["leitner_box"] == 3
+
+
+def test_add_from_entry_rejects_bad_source(fresh):
+    from backend.app import create_app
+    app = create_app()
+    client = app.test_client()
+    r = client.post("/api/vocab/add-from-entry", json={
+        "lang": "en", "word": "x", "source": "google", "glossary": "y",
+    })
+    assert r.status_code == 400
+
+
+def test_add_from_entry_requires_glossary(fresh):
+    from backend.app import create_app
+    app = create_app()
+    client = app.test_client()
+    r = client.post("/api/vocab/add-from-entry", json={
+        "lang": "en", "word": "x", "source": "llm",
+    })
+    assert r.status_code == 400
+
+
+# --- dictionary lookup payload includes in_vocab -------------------------
+
+def test_dictionary_lookup_payload_includes_vocab_state(fresh):
+    """The dictionary /lookup response must carry in_vocab + leitner_box so
+    the card can render the Source row without a second round-trip."""
+    _seed_vocab(fresh, word="banana", lang="en")
+    from backend.app import create_app
+    from backend.services.dictionaries import registry, wordnet as wordnet_svc
+
+    app = create_app()
+    client = app.test_client()
+    r = client.post("/api/dictionary/lookup", json={"lang": "en", "word": "banana"})
+    assert r.status_code == 200
+    body = r.get_json()["data"]
+    assert body["in_vocab"] is True
+    assert body["leitner_box"] == 1
+    assert isinstance(body["vocab_id"], int)
+
+
+def test_dictionary_lookup_payload_in_vocab_false_when_missing(fresh):
+    """For a word that WordNet can't find, the dictionary /lookup response
+    must report in_vocab=false so the card can render the Add button."""
+    from backend.app import create_app
+    app = create_app()
+    client = app.test_client()
+    r = client.post("/api/dictionary/lookup", json={"lang": "en", "word": "zzznotaword"})
+    assert r.status_code == 200
+    body = r.get_json()["data"]
+    assert body["in_vocab"] is False
+    assert body["leitner_box"] is None
+    assert body["vocab_id"] is None

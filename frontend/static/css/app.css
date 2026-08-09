@@ -413,6 +413,10 @@ code, pre, kbd, samp { font-family: var(--font-mono); }
   color: var(--text-muted);
   margin-right: var(--sp-1);
 }
+.result-provider-switcher__vocab {
+  margin-left: auto;
+  display: inline-flex; align-items: center; gap: var(--sp-1);
+}
 
 
 /* Toggle */

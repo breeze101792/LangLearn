@@ -91,6 +91,76 @@ def update_vocab(vocab_id: int):
     return ok(res)
 
 
+@bp.get("/lookup")
+def lookup_vocab():
+    """Return the Leitner box for a (lang, word), or {in_vocab:false}.
+
+    The Dictionary page calls this after rendering a result so it can show
+    either "Add to box 1" or the current box number next to the Source row.
+    """
+    lang = request.args.get("lang")
+    word = request.args.get("word")
+    if not is_valid_lang(lang):
+        return jsonify(err("invalid language", code="invalid_lang")), 400
+    if not isinstance(word, str) or not word.strip():
+        return jsonify(err("word required", code="invalid_word")), 400
+    found = vocab_svc.find_vocab_box(
+        user_id=config.DEFAULT_USER_ID, language=lang, word=word,
+    )
+    return ok({"in_vocab": found is not None,
+               "lang": lang, "word": word.strip()[:200],
+               "leitner_box": found["leitner_box"] if found else None,
+               "vocab_id": found["id"] if found else None})
+
+
+@bp.post("/add-from-entry")
+def add_from_entry():
+    """Insert (or refresh) a vocab row from a flattened dictionary payload.
+
+    The Dictionary card's "Add to box 1" button calls this when auto-add
+    is off. Always lands at box 1. Re-adding an existing word refreshes
+    the row's data and leaves the box unchanged.
+    """
+    body = request.get_json(silent=True) or {}
+    lang = body.get("lang")
+    if not is_valid_lang(lang):
+        return jsonify(err("invalid language", code="invalid_lang")), 400
+    word = body.get("word")
+    source = body.get("source")
+    pos = body.get("pos")
+    glossary = body.get("glossary")
+    example = body.get("example")
+    explanation_primary = body.get("explanation_primary")
+    explanation_secondary = body.get("explanation_secondary")
+    if not isinstance(word, str) or not word.strip():
+        return jsonify(err("word required", code="invalid_word")), 400
+    if not isinstance(source, str) or source not in ("wordnet", "llm", "user"):
+        return jsonify(err("source must be wordnet, llm, or user", code="invalid_source")), 400
+    if not isinstance(glossary, str) or not glossary.strip():
+        return jsonify(err("glossary required", code="invalid_input")), 400
+    try:
+        res = vocab_svc.add_vocab(
+            user_id=config.DEFAULT_USER_ID,
+            language=lang,
+            word=word,
+            source=source,
+            sense_idx=0,
+            pos=pos,
+            glossary=glossary,
+            example=example,
+            explanation_primary=explanation_primary,
+            explanation_secondary=explanation_secondary,
+        )
+    except (ValueError, TypeError) as e:
+        return jsonify(err(str(e), code="invalid_input")), 400
+    # Surface the resulting box so the UI can swap the button for a badge
+    # without a second round-trip.
+    box = vocab_svc.find_vocab_box(
+        user_id=config.DEFAULT_USER_ID, language=lang, word=word,
+    )
+    return ok({**res, "leitner_box": box["leitner_box"] if box else 1})
+
+
 @bp.get("/review/status")
 def review_status():
     lang = request.args.get("lang")

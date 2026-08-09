@@ -77,12 +77,21 @@ def lookup():
             )
         except Exception as e:  # noqa: BLE001
             log.warning("auto-add failed for %s: %s", word, e)
+    # Always include the current vocab state so the card can render either
+    # the box badge (in vocab) or the "Add to box 1" button (not in vocab)
+    # without a follow-up request.
+    vocab_state = vocab_svc.find_vocab_box(
+        user_id=config.DEFAULT_USER_ID, language=lang, word=word,
+    )
     payload = {
         "entry": entry.to_dict(),
         "source": entry.source,
         "auto_added": auto_added,
         "providers_in_chain": len(chain),
         "provider_errors": chain_errors,
+        "in_vocab": vocab_state is not None,
+        "leitner_box": vocab_state["leitner_box"] if vocab_state else None,
+        "vocab_id": vocab_state["id"] if vocab_state else None,
     }
     if used_provider:
         payload["provider"] = used_provider
