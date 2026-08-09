@@ -149,21 +149,18 @@ def providers():
 
 
 def _llm_status() -> tuple[bool, str]:
-    """True when the configured LLM provider has the credentials it needs.
+    """True when the OpenAI-compatible provider has the credentials it needs.
 
-    Mirrors the env-var checks inside `OpenAICompatClient` / `OllamaCompatClient`
-    so the UI can warn the user before they wait on a lookup that will fail.
-    Reads env vars per call so test fixtures that mutate env after import
-    time still see the latest values.
+    Mirrors the env-var checks inside `OpenAICompatClient` so the UI can warn
+    the user before they wait on a lookup that will fail. Reads env vars per
+    call so test fixtures that mutate env after import time still see the
+    latest values.
     """
     import os
-    kind = (os.environ.get("LLM_PROVIDER") or config.LLM_PROVIDER or "openai").lower()
-    if kind == "ollama":
-        base = os.environ.get("OLLAMA_BASE_URL") or config.OLLAMA_BASE_URL
-        return bool(base), kind
-    # OpenAI-compatible: any URL + a non-empty API key is enough for most
-    # providers. Allow missing key when the base URL is non-OpenAI (some
-    # local proxies don't require auth).
+    kind = "openai-compat"
+    # Any URL + a non-empty API key is enough for most providers. Allow a
+    # missing key when the base URL is non-OpenAI (some local proxies don't
+    # require auth).
     base = os.environ.get("OPENAI_BASE_URL") or config.OPENAI_BASE_URL
     if base and "api.openai.com" not in base:
         return True, kind

@@ -14,7 +14,6 @@ import pytest
 @pytest.fixture
 def fresh(monkeypatch, tmp_path):
     monkeypatch.setenv("LANGLEARN_DATA_DIR", str(tmp_path))
-    monkeypatch.setenv("LLM_PROVIDER", "openai")
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     monkeypatch.setenv("OPENAI_BASE_URL", "https://example.invalid/v1")
     monkeypatch.setenv("OPENAI_MODEL", "gpt-test")
@@ -136,31 +135,3 @@ def test_network_error_maps_to_llm_error(fresh, monkeypatch):
             lang="es", word="casa",
             explanation_primary="en", explanation_secondary=None,
         )
-
-
-def test_ollama_fallback_when_strict_rejected(fresh, monkeypatch):
-    from backend.services import llm
-
-    monkeypatch.setattr(llm.config, "LLM_PROVIDER", "ollama")
-    monkeypatch.setattr(llm.config, "OLLAMA_BASE_URL", "http://example.invalid")
-    monkeypatch.setattr(llm.config, "OLLAMA_MODEL", "llama-test")
-
-    payload = {"senses": [{"pos": "noun", "definitions": [{"glossary": "ok"}]}]}
-
-    def fake_post(url, json=None, headers=None, timeout=None):
-        if "response_format" in (json or {}):
-            r = mock.Mock()
-            r.status_code = 400
-            r.text = "strict schema unsupported"
-            return r
-        r = mock.Mock()
-        r.status_code = 200
-        r.json.return_value = {"choices": [{"message": {"content": _json.dumps(payload)}}]}
-        return r
-
-    monkeypatch.setattr("backend.services.llm.requests.post", fake_post)
-    out = llm.lookup_word_via_llm(
-        lang="es", word="casa",
-        explanation_primary="en", explanation_secondary=None,
-    )
-    assert out["senses"][0]["definitions"][0]["glossary"] == "ok"

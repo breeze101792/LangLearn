@@ -9,7 +9,7 @@ future add without schema change.
 ## Stack
 
 - **Backend:** Python 3.10+ Flask (app factory + blueprints), raw SQLite via
-  `sqlite3`, NLTK WordNet for English, OpenAI-compatible + Ollama LLM clients.
+  `sqlite3`, NLTK WordNet for English, OpenAI-compatible LLM client.
 - **Frontend:** Vanilla HTML/CSS/JS, hash routing, no build step, no CDN.
 - **Storage:** SQLite at `./data/langlearn.sqlite`. Built-in English seed at
   `backend/data/built-in/english.json`.
@@ -34,22 +34,20 @@ LANGLEARN_DATA_DIR=/var/lib/langlearn ./start.sh
 
 ## LLM configuration
 
-Pick a provider via `LLM_PROVIDER`:
+The app uses a single OpenAI-compatible Chat Completions endpoint. Copy
+`.env.example` to `.env` and set the values, or export the env vars directly
+(shell exports override `.env`):
 
 ```bash
-# OpenAI-compatible (default)
-LLM_PROVIDER=openai
-OPENAI_API_KEY=sk-...
-OPENAI_BASE_URL=https://api.openai.com/v1   # default
-OPENAI_MODEL=gpt-4o-mini                    # default
+cp .env.example .env   # then edit OPENAI_API_KEY
 
-# Ollama (local)
-LLM_PROVIDER=ollama
-OLLAMA_BASE_URL=http://127.0.0.1:11434      # default
-OLLAMA_MODEL=llama3.1                        # default
+# or export directly
+export OPENAI_API_KEY=sk-...
+export OPENAI_BASE_URL=https://api.openai.com/v1   # default
+export OPENAI_MODEL=gpt-4o-mini                    # default
 ```
 
-Both providers use strict JSON schema via `response_format={"type":"json_schema", ...}`
+The client uses strict JSON schema via `response_format={"type":"json_schema", ...}`
 with one retry on schema validation failure. Schema files live in
 `backend/services/llm.py`.
 
@@ -91,7 +89,7 @@ langlearn/
 │   │   └── phrases.py
 │   ├── services/                 business logic, no HTTP
 │   │   ├── settings.py
-│   │   ├── llm.py                OpenAI / Ollama clients + schemas
+│   │   ├── llm.py                OpenAI-compatible client + schemas
 │   │   ├── seed.py               built-in + LLM seeding
 │   │   ├── leitner.py            5-box scheduler
 │   │   ├── vocab.py

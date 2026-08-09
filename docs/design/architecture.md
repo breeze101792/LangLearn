@@ -26,7 +26,7 @@ Flask app factory (backend/app.py)
    │     └── settings.py            /api/settings
    │
    ├── services/                    Business logic, no HTTP knowledge
-   │     ├── llm.py                 Pluggable client (openai_compat | ollama)
+    │     ├── llm.py                 OpenAI-compatible client
    │     ├── dictionaries/
    │     │     ├── base.py          WordEntry, Sense dataclasses
    │     │     ├── wordnet.py       NLTK WordNet provider (English only)

@@ -2,3 +2,4 @@ Flask>=3.0
 nltk>=3.8
 jsonschema>=4.21
 requests>=2.31
+python-dotenv>=1.0

@@ -1,14 +1,11 @@
 """LLM client.
 
-Supports two providers, selected via env `LLM_PROVIDER=openai|ollama`:
+Uses an OpenAI-compatible Chat Completions API endpoint, configured via
+`OPENAI_API_KEY`, `OPENAI_BASE_URL`, `OPENAI_MODEL`. Sends
+`response_format={"type":"json_schema", ...}` to enforce schema.
 
-- openai (default): uses OpenAI-compatible Chat Completions API.
-  Sends `response_format={"type":"json_schema", ...}` to enforce schema.
-- ollama: uses Ollama's OpenAI-compatible endpoint, falls back to
-  prompt-only JSON when the server doesn't support json_schema.
-
-Both clients return a parsed dict (validated against the requested schema)
-or raise `LLMError`. One retry is attempted on schema failure with the
+The client returns a parsed dict (validated against the requested schema)
+or raises `LLMError`. One retry is attempted on schema failure with the
 error appended to the prompt.
 """
 
@@ -144,8 +141,6 @@ FILL_PHRASE_SCHEMA: dict = {
 
 
 def _client():
-    if config.LLM_PROVIDER == "ollama":
-        return OllamaClient()
     return OpenAICompatClient()
 
 
@@ -228,47 +223,6 @@ class OpenAICompatClient(_BaseClient):
 
     def supports_strict_schema(self) -> bool:
         return True
-
-
-class OllamaClient(_BaseClient):
-    """Ollama exposes /v1/chat/completions compatible with OpenAI for many models.
-
-    Some Ollama builds accept `format` (JSON schema) but not the OpenAI
-    `response_format.json_schema` block. We try strict mode first; if the
-    server rejects, fall back to `format=<json schema dict>`.
-    """
-
-    def chat(self, *, system, user, schema, schema_name, temperature) -> str:
-        import os
-        url = (os.environ.get("OLLAMA_BASE_URL") or config.OLLAMA_BASE_URL).rstrip("/") + "/v1/chat/completions"
-        model = os.environ.get("OLLAMA_MODEL") or config.OLLAMA_MODEL
-        # First attempt: emulate OpenAI strict schema. Many Ollama builds return 400.
-        payload = {
-            "model": model,
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
-            "temperature": temperature,
-            "response_format": {
-                "type": "json_schema",
-                "json_schema": {"name": schema_name, "strict": True, "schema": schema},
-            },
-        }
-        try:
-            return _post_json(url, payload, {})
-        except LLMError as e:
-            log.info("Ollama strict mode rejected (%s); falling back to format=schema", e)
-        payload2 = {
-            "model": model,
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
-            "temperature": temperature,
-            "format": schema,
-        }
-        return _post_json(url, payload2, {})
 
 
 def _post_json(url: str, payload: dict, headers: dict) -> str:

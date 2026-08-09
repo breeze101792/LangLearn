@@ -393,7 +393,7 @@ def test_providers_reports_llm_configured_when_key_present(fresh, monkeypatch):
     r = client.get("/api/dictionary/providers")
     body = r.get_json()
     assert body["data"]["llm_configured"] is True
-    assert body["data"]["llm_provider_kind"] == "openai"
+    assert body["data"]["llm_provider_kind"] == "openai-compat"
     llm = next(p for p in body["data"]["providers"] if p["name"] == "llm")
     assert llm["configured"] is True
 
@@ -401,7 +401,6 @@ def test_providers_reports_llm_configured_when_key_present(fresh, monkeypatch):
 def test_providers_reports_llm_unconfigured_when_key_missing(fresh, monkeypatch):
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.setenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
-    monkeypatch.setenv("LLM_PROVIDER", "openai")
     # Re-import config so the new env is read.
     from backend.app import create_app
     app = create_app()

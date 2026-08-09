@@ -9,6 +9,9 @@ __pycache__/
 data/
 !data/.gitkeep
 
+# Local config
+.env
+
 # OS
 .DS_Store
 Thumbs.db

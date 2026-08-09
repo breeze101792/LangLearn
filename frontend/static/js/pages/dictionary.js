@@ -12,7 +12,7 @@ import { renderWordCard } from "../components/word-card.js";
 
 // Metadata fetched from /api/dictionary/providers keyed by name.
 let providerMeta = {};
-let llmStatus = { configured: true, provider_kind: "openai" };
+let llmStatus = { configured: true, provider_kind: "openai-compat" };
 let providerMetaLoaded = false;
 let lastLang = null;
 
@@ -115,7 +115,7 @@ async function loadProviderMeta(lang) {
   }
   llmStatus = {
     configured: res.data.llm_configured !== false,
-    provider_kind: res.data.llm_provider_kind || "openai",
+    provider_kind: res.data.llm_provider_kind || "openai-compat",
   };
   providerMetaLoaded = true;
   maybeShowLLMBanner();
@@ -135,10 +135,8 @@ function maybeShowLLMBanner() {
   banner.innerHTML = `
     <strong>AI dictionary isn't configured.</strong>
     <p class="field__hint" style="margin: var(--sp-1) 0 0">
-      Set <code>LLM_PROVIDER=${escapeHtml(llmStatus.provider_kind)}</code>
-      ${llmStatus.provider_kind === "ollama"
-        ? "and start <code>ollama serve</code> with a model pulled."
-        : "and <code>OPENAI_API_KEY</code> before launching the app. See the README."}
+      Set <code>OPENAI_API_KEY</code> (and optionally <code>OPENAI_BASE_URL</code>,
+      <code>OPENAI_MODEL</code>) before launching the app. See the README.
     </p>
   `;
   result.appendChild(banner);

@@ -34,17 +34,14 @@ Environment variables (options take precedence):
   HOST                   Host to bind on (default: 0.0.0.0)
   LANGLEARN_DATA_DIR     Runtime data directory (default: ./data)
   FLASK_DEBUG            Set to "1" to enable debug / auto-reload mode
-  LLM_PROVIDER           "openai" (default) or "ollama"
-  OPENAI_API_KEY         Required when LLM_PROVIDER=openai
+  OPENAI_API_KEY         Required to enable LLM lookups
   OPENAI_BASE_URL        Default: https://api.openai.com/v1
   OPENAI_MODEL           Default: gpt-4o-mini
-  OLLAMA_BASE_URL        Default: http://127.0.0.1:11434
-  OLLAMA_MODEL           Default: llama3.1
 
 Examples:
   ./start.sh
   ./start.sh --port 9000
-  LLM_PROVIDER=ollama OLLAMA_MODEL=llama3.1 ./start.sh
+  OPENAI_API_KEY=sk-... ./start.sh
   FLASK_DEBUG=1 ./start.sh
 EOF
 }

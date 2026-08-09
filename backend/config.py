@@ -10,7 +10,10 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+from dotenv import load_dotenv
+
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
+load_dotenv(PROJECT_ROOT / ".env", override=False)
 
 
 def _data_dir() -> Path:
@@ -82,11 +85,8 @@ LANGUAGE_CATALOG: list[dict] = [
     {"code": "de", "display_name": "German", "is_built_in": 0},
 ]
 
-LLM_PROVIDER: str = os.environ.get("LLM_PROVIDER", "openai").lower()
 OPENAI_API_KEY: str = os.environ.get("OPENAI_API_KEY", "")
 OPENAI_BASE_URL: str = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1")
 OPENAI_MODEL: str = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
-OLLAMA_BASE_URL: str = os.environ.get("OLLAMA_BASE_URL", "http://127.0.0.1:11434")
-OLLAMA_MODEL: str = os.environ.get("OLLAMA_MODEL", "llama3.1")
 
 LLM_TIMEOUT_SECONDS: int = int(os.environ.get("LLM_TIMEOUT_SECONDS", "20"))
