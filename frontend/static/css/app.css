@@ -347,7 +347,61 @@ code, pre, kbd, samp { font-family: var(--font-mono); }
 .list-item__main { color: var(--text-primary); }
 .list-item__meta { color: var(--text-secondary); font-size: 14px; }
 .list-item__actions { display: flex; gap: var(--sp-2); }
-.list-item__badges { display: flex; gap: var(--sp-1); flex-wrap: wrap; }
+.list-item__badges { display: flex; gap: var(--sp-1); flex-wrap: wrap; align-items: center; position: relative; }
+
+/* Box picker trigger (replaces the old 1-5 button row on Vocabulary rows) */
+.box-picker__trigger {
+  border: 1px solid var(--border);
+  cursor: pointer;
+  font: inherit;
+}
+.box-picker__trigger:hover { background: var(--accent-soft); color: var(--accent-text); border-color: var(--accent); }
+.box-picker__trigger[aria-expanded="true"] { background: var(--accent-soft); color: var(--accent-text); border-color: var(--accent); }
+
+/* Floating box picker popover (positioned via JS below or above the trigger) */
+.box-picker {
+  position: fixed;
+  z-index: 60;
+  min-width: 200px;
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-2);
+  padding: var(--sp-1);
+  display: flex; flex-direction: column;
+  gap: 2px;
+}
+.box-picker[hidden] { display: none; }
+.box-picker__item {
+  display: flex; align-items: baseline; gap: var(--sp-2);
+  padding: var(--sp-1) var(--sp-3);
+  background: transparent;
+  border: 0;
+  border-radius: var(--r-sm);
+  font: inherit;
+  font-size: 14px;
+  color: var(--text-primary);
+  text-align: left;
+  cursor: pointer;
+}
+.box-picker__item:hover,
+.box-picker__item:focus-visible {
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  outline: none;
+}
+.box-picker__item.is-active {
+  background: var(--accent);
+  color: var(--text-inverse);
+}
+.box-picker__item.is-active .box-picker__label { color: var(--text-inverse); }
+.box-picker__num {
+  font-weight: 600;
+  width: 18px; text-align: center;
+  color: var(--accent);
+}
+.box-picker__item.is-active .box-picker__num { color: var(--text-inverse); }
+.box-picker__label { color: var(--text-secondary); font-size: 13px; }
 
 /* Segmented control */
 .segmented {

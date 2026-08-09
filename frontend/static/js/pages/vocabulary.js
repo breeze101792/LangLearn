@@ -64,12 +64,21 @@ export function renderVocabulary(host) {
     const next = e.target.closest("button[data-pager='next']");
     if (next && !next.disabled) { offset += pageSize; load(); return; }
 
-    const boxBtn = e.target.closest("button[data-set-box]");
-    if (boxBtn) {
-      const li = boxBtn.closest(".list-item");
+    const pickerBtn = e.target.closest('[data-action="open-box-picker"]');
+    if (pickerBtn) {
+      const li = pickerBtn.closest(".list-item");
+      toggleBoxPicker(li, pickerBtn);
+      return;
+    }
+    const pickBtn = e.target.closest("button[data-set-box]");
+    if (pickBtn) {
+      const li = pickBtn.closest(".list-item");
       const id = Number(li?.dataset.id || "0");
-      const box = Number(boxBtn.dataset.setBox);
-      if (id && box) moveToBox(id, box, li);
+      const box = Number(pickBtn.dataset.setBox);
+      if (id && box) {
+        closeAllBoxPickers();
+        moveToBox(id, box, li);
+      }
       return;
     }
     const delBtn = e.target.closest("button[data-action='delete']");
@@ -143,12 +152,15 @@ export function renderVocabulary(host) {
         ? `<span class="badge badge--user">You</span>`
         : `<span class="badge badge--builtin">WordNet</span>`;
     const pos = item.pos ? `<span class="badge badge--muted">${escapeHtml(item.pos)}</span>` : "";
-    const boxBtns = [1, 2, 3, 4, 5].map((b) =>
-      `<button class="btn btn--sm ${b === box ? "btn--primary" : "btn--ghost"}"
-               data-set-box="${b}" aria-label="Move to box ${b}"
-               title="${escapeHtml(BOX_LABELS[b])}">${b}</button>`
-    ).join("");
     const wordDisplay = item.word.replace(/_/g, " ");
+    const boxPicker = [1, 2, 3, 4, 5].map((b) => `
+      <button type="button" class="box-picker__item ${b === box ? "is-active" : ""}"
+              data-set-box="${b}" role="option" aria-selected="${b === box}"
+              title="${escapeHtml(BOX_LABELS[b])}">
+        <span class="box-picker__num">${b}</span>
+        <span class="box-picker__label">${escapeHtml(BOX_LABELS[b])}</span>
+      </button>
+    `).join("");
     return `
       <article class="list-item" data-id="${item.id}">
         <div class="list-item__badges">${sourceBadge}${pos}<span class="badge badge--muted">${escapeHtml(BOX_LABELS[box])}</span></div>
@@ -156,10 +168,15 @@ export function renderVocabulary(host) {
         ${item.glossary ? `<div class="list-item__meta">${escapeHtml(item.glossary)}</div>` : ""}
         ${item.example ? `<div class="list-item__meta" style="color: var(--text-muted)"><em>${escapeHtml(item.example)}</em></div>` : ""}
         <div class="list-item__actions">
-          <div class="row" style="gap: var(--sp-1)">${boxBtns}</div>
           <div class="spacer"></div>
+          <button type="button" class="btn btn--ghost btn--sm box-picker__trigger"
+                  data-action="open-box-picker" aria-haspopup="listbox"
+                  aria-expanded="false" title="Move to a different box">
+            Box <span data-box-num>${box}</span> <span aria-hidden="true">▾</span>
+          </button>
           <button class="btn btn--ghost btn--sm" data-action="delete">Delete</button>
         </div>
+        <div class="box-picker" role="listbox" hidden>${boxPicker}</div>
       </article>
     `;
   }
@@ -171,17 +188,57 @@ export function renderVocabulary(host) {
       toast({ title: "Couldn't update level", message: res.error || "unknown error", variant: "error" });
       return;
     }
-    // Reflect the new level in the row's badge and button states locally,
-    // then re-fetch so the segment counts and pagination stay in sync.
     const newBox = clampBox(res.data.leitner_box);
+    // Reflect the new level on the trigger button and the badges row,
+    // then re-fetch so the segment counts and pagination stay in sync.
+    const numEl = li.querySelector(".box-picker__trigger [data-box-num]");
+    if (numEl) numEl.textContent = String(newBox);
     const badge = li.querySelector(".list-item__badges .badge--muted");
     if (badge) badge.textContent = BOX_LABELS[newBox];
-    li.querySelectorAll("button[data-set-box]").forEach((b) => {
+    li.querySelectorAll(".box-picker__item").forEach((b) => {
       const isActive = Number(b.dataset.setBox) === newBox;
-      b.classList.toggle("btn--primary", isActive);
-      b.classList.toggle("btn--ghost", !isActive);
+      b.classList.toggle("is-active", isActive);
+      b.setAttribute("aria-selected", isActive ? "true" : "false");
     });
+    closeAllBoxPickers();
     load();
+  }
+
+  function toggleBoxPicker(li, trigger) {
+    if (!li) return;
+    const picker = li.querySelector(".box-picker");
+    if (!picker) return;
+    const isOpen = !picker.hidden;
+    closeAllBoxPickers();
+    if (isOpen) {
+      trigger.setAttribute("aria-expanded", "false");
+      return;
+    }
+    picker.hidden = false;
+    trigger.setAttribute("aria-expanded", "true");
+    const rect = trigger.getBoundingClientRect();
+    // Open below the trigger by default; flip up if there isn't room.
+    const spaceBelow = window.innerHeight - rect.bottom;
+    picker.style.top = "";
+    picker.style.bottom = "";
+    picker.classList.remove("box-picker--up");
+    if (spaceBelow < 180) {
+      picker.style.bottom = `${window.innerHeight - rect.top + 4}px`;
+      picker.style.top = "auto";
+      picker.classList.add("box-picker--up");
+    } else {
+      picker.style.top = `${rect.bottom + 4}px`;
+      picker.style.left = `${rect.left}px`;
+    }
+  }
+
+  function closeAllBoxPickers() {
+    document.querySelectorAll(".box-picker").forEach((p) => {
+      p.hidden = true;
+    });
+    document.querySelectorAll(".box-picker__trigger").forEach((t) => {
+      t.setAttribute("aria-expanded", "false");
+    });
   }
 
   async function deleteRow(id, li) {
@@ -233,3 +290,20 @@ function escapeHtml(s) {
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
 }
+
+// Close any open box picker when the user clicks outside one or hits Escape.
+document.addEventListener("click", (e) => {
+  if (e.target.closest(".box-picker") || e.target.closest(".box-picker__trigger")) return;
+  document.querySelectorAll(".box-picker").forEach((p) => { p.hidden = true; });
+  document.querySelectorAll(".box-picker__trigger").forEach((t) => {
+    t.setAttribute("aria-expanded", "false");
+  });
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape") return;
+  const open = document.querySelector(".box-picker:not([hidden])");
+  if (!open) return;
+  open.hidden = true;
+  const trigger = open.closest(".list-item")?.querySelector(".box-picker__trigger");
+  if (trigger) trigger.setAttribute("aria-expanded", "false");
+});
