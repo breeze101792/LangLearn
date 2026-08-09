@@ -46,25 +46,28 @@ def lookup():
                 code="provider_unsupported_lang",
             )), 400
 
+    chain_errors: list[dict] = []
     if provider_override:
-        entry = registry.lookup_with_provider(
+        result = registry.lookup_with_provider(
             word=word, lang=lang, provider_name=provider_override,
             explanation_primary=settings.get("explanation_primary"),
             explanation_secondary=settings.get("explanation_secondary"),
         )
         used_provider = provider_override
     else:
-        entry = registry.lookup_via_chain(
+        result = registry.lookup_via_chain(
             word=word,
             lang=lang,
             chain=chain,
             explanation_primary=settings.get("explanation_primary"),
             explanation_secondary=settings.get("explanation_secondary"),
         )
+    entry = result.entry
+    chain_errors = result.errors
     auto_added = False
     if entry.is_empty and not chain and not provider_override:
         return ok({"entry": entry.to_dict(), "source": "", "auto_added": False,
-                   "providers_in_chain": 0})
+                   "providers_in_chain": 0, "provider_errors": []})
     if not entry.is_empty and settings.get("auto_add_vocab"):
         try:
             auto_added = vocab_svc.auto_add_from_lookup(
@@ -79,6 +82,7 @@ def lookup():
         "source": entry.source,
         "auto_added": auto_added,
         "providers_in_chain": len(chain),
+        "provider_errors": chain_errors,
     }
     if used_provider:
         payload["provider"] = used_provider
@@ -105,11 +109,12 @@ def force_provider(provider: str):
     if not word:
         return jsonify(err("word must be 1-200 chars of letters", code="invalid_word")), 400
     settings = settings_svc.get_settings(config.DEFAULT_USER_ID)
-    entry = registry.lookup_with_provider(
+    result = registry.lookup_with_provider(
         word=word, lang=lang, provider_name=provider,
         explanation_primary=settings.get("explanation_primary"),
         explanation_secondary=settings.get("explanation_secondary"),
     )
+    entry = result.entry
     auto_added = False
     if not entry.is_empty and settings.get("auto_add_vocab"):
         try:
@@ -125,6 +130,7 @@ def force_provider(provider: str):
         "source": entry.source,
         "provider": provider,
         "auto_added": auto_added,
+        "provider_errors": result.errors,
     })
 
 

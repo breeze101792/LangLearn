@@ -400,7 +400,7 @@ async function doLookup(word, lang, providerOverride) {
   }
   const data = res.data || {};
   if (!data.entry || !data.entry.senses || data.entry.senses.length === 0) {
-    renderNoResult(resultHost, word, lang, data.suggestions || []);
+    renderNoResult(resultHost, word, lang, data.suggestions || [], data.provider_errors || []);
     return;
   }
   renderEntry(resultHost, data.entry, data.source, word, lang);
@@ -425,10 +425,12 @@ function renderEntry(host, entry, source, word, lang) {
   renderSwitcherInto(card, lang, source || null);
 }
 
-function renderNoResult(host, word, lang, suggestions) {
+function renderNoResult(host, word, lang, suggestions, providerErrors) {
   const sugHtml = renderSuggestions(suggestions);
+  const errHtml = renderProviderErrors(providerErrors);
   host.innerHTML = `
     <div class="card">
+      ${errHtml}
       <p>No senses found for "${escapeHtml(word)}" in this provider.</p>
       <p class="field__hint">Switch to another provider below to try again.</p>
       ${sugHtml}
@@ -438,6 +440,27 @@ function renderNoResult(host, word, lang, suggestions) {
   const card = host.querySelector(".card");
   // Highlight the LLM chip by default since AI has the broadest coverage.
   renderSwitcherInto(card, lang, "llm");
+}
+
+function renderProviderErrors(errors) {
+  if (!errors || !errors.length) return "";
+  const items = errors.map((e) => {
+    const name = providerDisplayName(e.provider);
+    const msg = String(e.error || "unknown error");
+    return `<li><strong>${escapeHtml(name)}</strong>: ${escapeHtml(msg)}</li>`;
+  }).join("");
+  return `
+    <div class="dict-provider-error">
+      <strong>Some providers failed:</strong>
+      <ul>${items}</ul>
+    </div>
+  `;
+}
+
+function providerDisplayName(name) {
+  if (name === "llm") return "AI";
+  if (name === "wordnet") return "WordNet";
+  return name;
 }
 
 function renderSuggestions(suggestions) {

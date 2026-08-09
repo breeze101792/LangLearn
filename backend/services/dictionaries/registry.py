@@ -8,6 +8,7 @@ the user's settings; if a provider is unknown or disabled, it's skipped.
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass, field
 from typing import Callable
 
 from ...util import is_valid_lang
@@ -17,6 +18,17 @@ log = logging.getLogger(__name__)
 
 PROVIDERS: dict[str, Callable[..., WordEntry]] = {}
 PROVIDER_SUPPORTS: dict[str, Callable[[str], bool]] = {}
+
+
+@dataclass
+class ChainResult:
+    """Outcome of running the chain. `entry` is the first non-empty result;
+    `errors` lists every provider that raised (with the short error string
+    coerced to str). The UI uses `errors` to distinguish 'word has no senses'
+    from 'every provider failed'."""
+
+    entry: WordEntry
+    errors: list[dict] = field(default_factory=list)
 
 
 def register(name: str, fn: Callable[..., WordEntry], *,
@@ -81,17 +93,19 @@ def get(name: str) -> Callable[..., WordEntry] | None:
     return PROVIDERS.get(name)
 
 
-def lookup_via_chain(word: str, lang: str, chain: list[dict], **kwargs) -> WordEntry:
+def lookup_via_chain(word: str, lang: str, chain: list[dict], **kwargs) -> ChainResult:
     """Walk the chain in order; first non-empty result wins.
 
-    Empty chain or all providers empty => returns empty WordEntry (not an error).
-    Provider raises => logged, skip, continue.
+    Returns a `ChainResult` carrying the winning entry (possibly empty) plus
+    a list of `{provider, error}` dicts for every provider that raised. The
+    UI uses this to distinguish 'no provider had this word' from 'every
+    provider failed' (typically a network / LLM outage).
     """
     if not is_valid_lang(lang):
-        return WordEntry.empty(word, lang)
+        return ChainResult(entry=WordEntry.empty(word, lang))
     if not isinstance(chain, list):
-        return WordEntry.empty(word, lang)
-    last_error: str | None = None
+        return ChainResult(entry=WordEntry.empty(word, lang))
+    errors: list[dict] = []
     for entry in chain:
         if not isinstance(entry, dict):
             continue
@@ -106,26 +120,35 @@ def lookup_via_chain(word: str, lang: str, chain: list[dict], **kwargs) -> WordE
         try:
             result = fn(word, lang, **kwargs)
         except Exception as e:  # noqa: BLE001 - chain continues
-            last_error = f"{name}: {e}"
+            errors.append({"provider": name, "error": str(e)})
             log.warning("provider %s raised on %s/%s: %s", name, lang, word, e)
             continue
         if not result.is_empty:
-            return result
-    if last_error:
-        log.info("chain exhausted with errors for %s/%s: %s", lang, word, last_error)
-    return WordEntry.empty(word, lang)
+            return ChainResult(entry=result, errors=errors)
+    if errors:
+        log.info("chain exhausted with errors for %s/%s: %s", lang, word,
+                 "; ".join(f"{e['provider']}: {e['error']}" for e in errors))
+    return ChainResult(entry=WordEntry.empty(word, lang), errors=errors)
 
 
-def lookup_with_provider(word: str, lang: str, provider_name: str, **kwargs) -> WordEntry:
-    """Force one provider (used by manual 'Look up with AI' button)."""
+def lookup_with_provider(word: str, lang: str, provider_name: str, **kwargs) -> ChainResult:
+    """Force one provider (used by manual 'Look up with AI' button).
+
+    Returns a `ChainResult` so the UI can surface the failure reason when the
+    forced provider errors out (e.g. AI timeout).
+    """
     fn = PROVIDERS.get(provider_name)
     if fn is None:
-        return WordEntry.empty(word, lang)
+        return ChainResult(entry=WordEntry.empty(word, lang))
     try:
-        return fn(word, lang, **kwargs)
+        entry = fn(word, lang, **kwargs)
     except Exception as e:  # noqa: BLE001
         log.warning("forced provider %s failed on %s/%s: %s", provider_name, lang, word, e)
-        return WordEntry.empty(word, lang)
+        return ChainResult(
+            entry=WordEntry.empty(word, lang),
+            errors=[{"provider": provider_name, "error": str(e)}],
+        )
+    return ChainResult(entry=entry)
 
 
 def bootstrap() -> None:
