@@ -22,3 +22,6 @@ Thumbs.db
 
 # Logs
 *.log
+
+# LLM eval probe runs (transient output)
+scripts/eval-llm/runs/
