@@ -344,10 +344,22 @@ code, pre, kbd, samp { font-family: var(--font-mono); }
   display: flex; flex-direction: column; gap: var(--sp-2);
 }
 .list-item--builtin { border-left: 4px solid var(--border-strong); }
+.list-item--familiar { opacity: 0.72; }
 .list-item__main { color: var(--text-primary); }
 .list-item__meta { color: var(--text-secondary); font-size: 14px; }
 .list-item__actions { display: flex; gap: var(--sp-2); }
 .list-item__badges { display: flex; gap: var(--sp-1); flex-wrap: wrap; align-items: center; position: relative; }
+
+/* "I remember this" checkmark toggle on structures/phrases rows. Off by
+   default (ghost button with a check glyph); on state uses the accent fill
+   so a familiar row reads as already-marked without a label. */
+.remember-btn {
+  border: 1px solid var(--border);
+  font-weight: 600;
+}
+.remember-btn:hover { background: var(--accent-soft); color: var(--accent-text); border-color: var(--accent); }
+.remember-btn--on { background: var(--accent); color: var(--text-inverse); border-color: var(--accent); }
+.remember-btn--on:hover { background: var(--accent-hover); color: var(--text-inverse); }
 
 /* Box picker trigger (replaces the old 1-5 button row on Vocabulary rows) */
 .box-picker__trigger {

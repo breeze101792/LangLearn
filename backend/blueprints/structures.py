@@ -15,15 +15,31 @@ EDITABLE_SOURCES = ("user", "llm")
 READONLY_SOURCES = ("built-in",)
 
 
-def _list(lang: str) -> list[dict]:
+def _list(lang: str, *, familiar: bool | None = None) -> list[dict]:
+    sql = (
+        "SELECT id, language, pattern, example_sentence, explanation_primary,"
+        "       explanation_secondary, source, familiar, added_at "
+        "FROM structures WHERE user_id=? AND language=?"
+    )
+    params: list = [config.DEFAULT_USER_ID, lang]
+    if familiar is not None:
+        sql += " AND familiar=?"
+        params.append(1 if familiar else 0)
+    sql += " ORDER BY source DESC, added_at DESC"
     with get_conn() as conn:
-        rows = conn.execute(
-            "SELECT id, language, pattern, example_sentence, explanation_primary,"
-            "       explanation_secondary, source, added_at "
-            "FROM structures WHERE user_id=? AND language=? ORDER BY source DESC, added_at DESC",
-            (config.DEFAULT_USER_ID, lang),
-        ).fetchall()
+        rows = conn.execute(sql, params).fetchall()
     return [dict(r) for r in rows]
+
+
+def _parse_familiar_arg(raw: str | None) -> bool | None:
+    """Parse the `?familiar=` query string. None means "no filter"."""
+    if raw is None or raw == "":
+        return None
+    if raw in ("0", "false", "False"):
+        return False
+    if raw in ("1", "true", "True"):
+        return True
+    raise ValueError("familiar must be 0/1 or true/false")
 
 
 def _ensure_lang(lang: str) -> bool:
@@ -48,7 +64,11 @@ def list_structures():
     lang = request.args.get("lang")
     if not _ensure_lang(lang):
         return jsonify(err("invalid language", code="invalid_lang")), 400
-    return ok({"items": _list(lang)})
+    try:
+        familiar = _parse_familiar_arg(request.args.get("familiar"))
+    except ValueError as e:
+        return jsonify(err(str(e), code="invalid_input")), 400
+    return ok({"items": _list(lang, familiar=familiar)})
 
 
 @bp.post("")
@@ -136,6 +156,37 @@ def delete_structure(item_id: int):
         conn.execute("DELETE FROM structures WHERE id=? AND user_id=?",
                      (item_id, config.DEFAULT_USER_ID))
     return ok({"deleted_id": item_id})
+
+
+@bp.patch("/<int:item_id>")
+def patch_structure(item_id: int):
+    """Toggle the `familiar` flag on a row. Built-in rows are markable too,
+    which is intentional — the Structures page lets users retire starter rows
+    they've outgrown. `familiar` is the only field accepted on this route;
+    content edits still go through PUT."""
+    body = request.get_json(silent=True) or {}
+    if not isinstance(body, dict) or "familiar" not in body:
+        return jsonify(err("familiar required (bool)", code="invalid_input")), 400
+    raw = body["familiar"]
+    if isinstance(raw, bool):
+        familiar = raw
+    elif raw in (0, 1):
+        familiar = bool(raw)
+    else:
+        return jsonify(err("familiar must be a boolean", code="invalid_input")), 400
+    with transaction() as conn:
+        row = conn.execute(
+            "UPDATE structures SET familiar=? WHERE id=? AND user_id=?",
+            (1 if familiar else 0, item_id, config.DEFAULT_USER_ID),
+        )
+        if row.rowcount == 0:
+            existing = conn.execute(
+                "SELECT 1 FROM structures WHERE id=? AND user_id=?",
+                (item_id, config.DEFAULT_USER_ID),
+            ).fetchone()
+            if existing is None:
+                return jsonify(err("not found", code="not_found")), 404
+    return ok({"id": item_id, "familiar": familiar})
 
 
 @bp.post("/fill")

@@ -32,13 +32,27 @@ def list_phrases():
     lang = request.args.get("lang")
     if not is_known_lang(lang):
         return jsonify(err("invalid language", code="invalid_lang")), 400
+    familiar_raw = request.args.get("familiar")
+    if familiar_raw is None or familiar_raw == "":
+        familiar: bool | None = None
+    elif familiar_raw in ("0", "false", "False"):
+        familiar = False
+    elif familiar_raw in ("1", "true", "True"):
+        familiar = True
+    else:
+        return jsonify(err("familiar must be 0/1 or true/false", code="invalid_input")), 400
+    sql = (
+        "SELECT id, language, phrase, literal_translation, explanation_primary,"
+        "       explanation_secondary, source, familiar, added_at "
+        "FROM phrases WHERE user_id=? AND language=?"
+    )
+    params: list = [config.DEFAULT_USER_ID, lang]
+    if familiar is not None:
+        sql += " AND familiar=?"
+        params.append(1 if familiar else 0)
+    sql += " ORDER BY source DESC, added_at DESC"
     with get_conn() as conn:
-        rows = conn.execute(
-            "SELECT id, language, phrase, literal_translation, explanation_primary,"
-            "       explanation_secondary, source, added_at "
-            "FROM phrases WHERE user_id=? AND language=? ORDER BY source DESC, added_at DESC",
-            (config.DEFAULT_USER_ID, lang),
-        ).fetchall()
+        rows = conn.execute(sql, params).fetchall()
     return ok({"items": [dict(r) for r in rows]})
 
 
@@ -127,6 +141,35 @@ def delete_phrase(item_id: int):
         conn.execute("DELETE FROM phrases WHERE id=? AND user_id=?",
                      (item_id, config.DEFAULT_USER_ID))
     return ok({"deleted_id": item_id})
+
+
+@bp.patch("/<int:item_id>")
+def patch_phrase(item_id: int):
+    """Toggle the `familiar` flag on a row. Built-in rows are markable too —
+    matches the structures endpoint and the user's mental model."""
+    body = request.get_json(silent=True) or {}
+    if not isinstance(body, dict) or "familiar" not in body:
+        return jsonify(err("familiar required (bool)", code="invalid_input")), 400
+    raw = body["familiar"]
+    if isinstance(raw, bool):
+        familiar = raw
+    elif raw in (0, 1):
+        familiar = bool(raw)
+    else:
+        return jsonify(err("familiar must be a boolean", code="invalid_input")), 400
+    with transaction() as conn:
+        row = conn.execute(
+            "UPDATE phrases SET familiar=? WHERE id=? AND user_id=?",
+            (1 if familiar else 0, item_id, config.DEFAULT_USER_ID),
+        )
+        if row.rowcount == 0:
+            existing = conn.execute(
+                "SELECT 1 FROM phrases WHERE id=? AND user_id=?",
+                (item_id, config.DEFAULT_USER_ID),
+            ).fetchone()
+            if existing is None:
+                return jsonify(err("not found", code="not_found")), 404
+    return ok({"id": item_id, "familiar": familiar})
 
 
 @bp.post("/fill")

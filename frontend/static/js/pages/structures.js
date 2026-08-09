@@ -31,21 +31,36 @@ export function renderStructures(host) {
   });
 }
 
-function renderStructureRow(item, host) {
+function renderStructureRow(item) {
   const isBuiltIn = item.source === "built-in";
+  const isFamiliar = !!item.familiar;
   const badge = isBuiltIn
     ? `<span class="badge badge--builtin">Built-in</span><span class="badge badge--muted">Read-only</span>`
     : (item.source === "llm"
         ? `<span class="badge badge--user">You</span><span class="badge badge--ai">AI</span>`
         : `<span class="badge badge--user">You</span>`);
+  const familiarBadge = isFamiliar ? `<span class="badge badge--ok">Familiar</span>` : "";
+  const rememberBtn = `
+    <button class="btn btn--ghost btn--sm remember-btn ${isFamiliar ? "remember-btn--on" : ""}"
+            data-action="remember"
+            data-id="${item.id}"
+            aria-pressed="${isFamiliar}"
+            title="${isFamiliar ? "Mark as unfamiliar" : "I remember this — hide from the list"}"
+            aria-label="${isFamiliar ? "Mark as unfamiliar" : "Mark as familiar"}">
+      <span aria-hidden="true">✓</span>
+    </button>
+  `;
   return `
-    <article class="list-item ${isBuiltIn ? "list-item--builtin" : ""}" data-id="${item.id}">
-      <div class="list-item__badges">${badge}</div>
+    <article class="list-item ${isBuiltIn ? "list-item--builtin" : ""} ${isFamiliar ? "list-item--familiar" : ""}" data-id="${item.id}">
+      <div class="list-item__badges">${badge}${familiarBadge}</div>
       <div class="list-item__main"><strong>${escapeHtml(item.pattern || "")}</strong></div>
       ${item.example_sentence ? `<div class="list-item__meta">Example: <code>${escapeHtml(item.example_sentence)}</code></div>` : ""}
       ${item.explanation_primary ? `<div class="list-item__meta">${escapeHtml(item.explanation_primary)}</div>` : ""}
       ${item.explanation_secondary ? `<div class="list-item__meta">${escapeHtml(item.explanation_secondary)}</div>` : ""}
-      ${isBuiltIn ? "" : `<div class="list-item__actions"><button class="btn btn--ghost btn--sm" data-action="edit">Edit</button><button class="btn btn--ghost btn--sm" data-action="delete">Delete</button></div>`}
+      <div class="list-item__actions">
+        ${rememberBtn}
+        ${isBuiltIn ? "" : `<button class="btn btn--ghost btn--sm" data-action="edit">Edit</button><button class="btn btn--ghost btn--sm" data-action="delete">Delete</button>`}
+      </div>
     </article>
   `;
 }
@@ -59,13 +74,18 @@ function escapeHtml(s) {
 function renderListPage({ host, title, kind, endpoint, fillEndpoint, emptyMsg, emptyActions, rowRenderer, fields, addBody }) {
   const state = store.get();
   const lang = (state.settings && state.settings.active_language) || "en";
+  let viewFamiliar = false;
 
   host.innerHTML = `
     <header class="page-head">
       <h1 class="page-head__title">${title}</h1>
       <p class="page-head__subtitle">Common ${title.toLowerCase()} for your active language.</p>
     </header>
-    <section class="row row--right" style="margin-bottom: var(--sp-3)">
+    <section class="row row--between" style="margin-bottom: var(--sp-3); align-items: center; gap: var(--sp-3)">
+      <div class="segmented" id="familiar-segments" role="tablist" aria-label="Familiarity filter">
+        <button class="segmented__item is-active" data-familiar="0" role="tab" aria-selected="true">Unfamiliar</button>
+        <button class="segmented__item" data-familiar="1" role="tab" aria-selected="false">Familiar</button>
+      </div>
       <button id="add-toggle" class="btn btn--primary">+ Add</button>
     </section>
     <section id="add-panel" style="display: none"></section>
@@ -75,7 +95,7 @@ function renderListPage({ host, title, kind, endpoint, fillEndpoint, emptyMsg, e
   document.getElementById("add-toggle").addEventListener("click", () => {
     const panel = document.getElementById("add-panel");
     if (panel.style.display === "none") {
-      renderAddForm(panel, lang, fields, fillEndpoint, addBody, async () => {
+      renderAddForm(panel, lang, fields, fillEndpoint, addBody, endpoint, async () => {
         panel.style.display = "none";
         await load();
       });
@@ -85,26 +105,44 @@ function renderListPage({ host, title, kind, endpoint, fillEndpoint, emptyMsg, e
     }
   });
 
+  host.querySelector("#familiar-segments").addEventListener("click", (e) => {
+    const btn = e.target.closest("button.segmented__item");
+    if (!btn) return;
+    const next = btn.dataset.familiar === "1";
+    if (next === viewFamiliar) return;
+    viewFamiliar = next;
+    host.querySelectorAll("#familiar-segments .segmented__item").forEach((b) => {
+      const on = b === btn;
+      b.classList.toggle("is-active", on);
+      b.setAttribute("aria-selected", on ? "true" : "false");
+    });
+    load();
+  });
+
   const list = host.querySelector("#list");
   async function load() {
-    const res = await api.get(`${endpoint}?lang=${encodeURIComponent(lang)}`);
+    const qs = `lang=${encodeURIComponent(lang)}&familiar=${viewFamiliar ? "1" : "0"}`;
+    const res = await api.get(`${endpoint}?${qs}`);
     if (!res.ok) {
       list.innerHTML = `<div class="card" style="border-left: 4px solid var(--danger)">${escapeHtml(res.error)}</div>`;
       return;
     }
     const items = res.data.items || [];
     if (!items.length) {
+      const msg = viewFamiliar
+        ? `No ${title.toLowerCase()} you've marked familiar yet.`
+        : emptyMsg;
       list.innerHTML = `
         <div class="empty-state">
-          <div class="empty-state__icon">📚</div>
-          <div class="empty-state__title">${escapeHtml(emptyMsg)}</div>
-          ${emptyActions ? `
+          <div class="empty-state__icon">${viewFamiliar ? "✅" : "📚"}</div>
+          <div class="empty-state__title">${escapeHtml(msg)}</div>
+          ${emptyActions && !viewFamiliar ? `
             <div class="row" style="margin-top: var(--sp-3)">
               <button class="btn btn--primary" id="seed-now">✨ Generate starter set</button>
               <button class="btn btn--ghost" id="add-now">+ Add manually</button>
             </div>` : ""}
         </div>`;
-      if (emptyActions) {
+      if (emptyActions && !viewFamiliar) {
         list.querySelector("#seed-now")?.addEventListener("click", async () => {
           const r = await api.post(`/api/languages/${lang}/initialize`, { force: false });
           if (!r.ok) {
@@ -126,6 +164,9 @@ function renderListPage({ host, title, kind, endpoint, fillEndpoint, emptyMsg, e
     });
     list.querySelectorAll("[data-action='delete']").forEach((b) => {
       b.addEventListener("click", () => deleteRow(b, items, endpoint, load));
+    });
+    list.querySelectorAll("[data-action='remember']").forEach((b) => {
+      b.addEventListener("click", () => rememberRow(b, endpoint, load));
     });
   }
   load();
@@ -161,7 +202,7 @@ async function deleteRow(btn, items, endpoint, load) {
   load();
 }
 
-function renderAddForm(panel, lang, fields, fillEndpoint, addBody, onSaved) {
+function renderAddForm(panel, lang, fields, fillEndpoint, addBody, endpoint, onSaved) {
   const inputs = {};
   const formHtml = fields.map((f) => `
     <div class="field">
@@ -210,7 +251,7 @@ function renderAddForm(panel, lang, fields, fillEndpoint, addBody, onSaved) {
   panel.querySelector("#save-add").addEventListener("click", async () => {
     const form = {};
     fields.forEach((f) => { form[f.key] = inputs[f.key].value.trim() || null; });
-    const res = await api.post(endpoint.replace(/^\//, "").replace(/^api\//, "/api/"), addBody(lang, form));
+    const res = await api.post(endpoint, addBody(lang, form));
     if (!res.ok) {
       toast({ title: "Couldn't save", message: res.error, variant: "error" });
       return;
@@ -218,4 +259,19 @@ function renderAddForm(panel, lang, fields, fillEndpoint, addBody, onSaved) {
     toast({ title: "Saved", variant: "success", ttl: 1500 });
     onSaved();
   });
+}
+
+async function rememberRow(btn, endpoint, load) {
+  const id = Number(btn.dataset.id || btn.closest(".list-item")?.dataset.id || "0");
+  if (!id) return;
+  const wasFamiliar = btn.getAttribute("aria-pressed") === "true";
+  const next = !wasFamiliar;
+  btn.disabled = true;
+  const res = await api.patch(`${endpoint}/${id}`, { familiar: next });
+  btn.disabled = false;
+  if (!res.ok) {
+    toast({ title: "Couldn't update", message: res.error, variant: "error" });
+    return;
+  }
+  load();
 }
