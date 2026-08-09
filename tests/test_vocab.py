@@ -759,14 +759,14 @@ def test_review_status_empty_language(fresh):
     assert sorted(out["by_box"].keys()) == [1, 2, 3, 4, 5]
 
 
-def test_review_status_ignores_invalid_language(fresh):
-    """review_status never raises on bad input — the underlying leitner
-    helpers just return empty dicts. The HTTP layer validates the lang
-    parameter before it reaches here."""
+def test_review_status_rejects_invalid_language(fresh):
+    """review_status must validate the language argument, matching
+    its siblings (review_next, list_vocab, count_vocab). The previous
+    silent-pass behavior made `/api/vocab/review/status` return zeros
+    instead of 400 for a typo like `?lang=eng`, which was inconsistent."""
     from backend.services import vocab as v
-    out = v.review_status(user_id=1, language="!!")
-    assert out["due"] == 0
-    assert sum(out["by_box"].values()) == 0
+    with pytest.raises(ValueError, match="invalid language"):
+        v.review_status(user_id=1, language="!!")
 
 
 # --- apply_review_grade lookup error --------------------------------------
@@ -807,6 +807,21 @@ def test_find_vocab_box_word_is_stripped_and_truncated(fresh):
                       glossary="g")
     out = v.find_vocab_box(user_id=1, language="en", word=f"  {long_word}  ")
     assert out["id"] == res["id"]
+
+
+def test_find_vocab_box_normalizes_spaces_to_underscore(fresh):
+    """User-typed "snap at" must find a row stored as "snap_at" (the
+    WordNet convention) and vice versa."""
+    from backend.services import vocab as v
+    res = v.add_vocab(user_id=1, language="en", word="snap_at",
+                      source="user", glossary="g")
+    out = v.find_vocab_box(user_id=1, language="en", word="snap at")
+    assert out["id"] == res["id"]
+    # And the reverse direction also works.
+    res2 = v.add_vocab(user_id=1, language="en", word="look up",
+                        source="user", glossary="g")
+    out2 = v.find_vocab_box(user_id=1, language="en", word="look_up")
+    assert out2["id"] == res2["id"]
 
 
 # --- auto_add_from_lookup edge cases ---------------------------------------

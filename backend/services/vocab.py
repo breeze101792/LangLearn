@@ -11,7 +11,7 @@ from typing import Any
 
 from .. import config
 from ..db import get_conn, transaction
-from ..util import is_valid_lang
+from ..util import is_valid_lang, normalize_word
 from . import leitner
 
 log = logging.getLogger(__name__)
@@ -37,7 +37,13 @@ def add_vocab(*, user_id: int, language: str, word: str, source: str,
         raise ValueError("glossary required")
     if source not in ("wordnet", "llm", "user"):
         raise ValueError("invalid source")
-    word = word.strip()[:200]
+    # Normalize multi-word input: "snap at" -> "snap_at". The dictionary
+    # provider indexes multi-word lemmas with underscores (WordNet's
+    # convention), and the vocab lookup normalizes the same way, so storing
+    # the normalized form keeps lookups round-trippable in either direction.
+    word = normalize_word(word)[:200]
+    if not word:
+        raise ValueError("word required")
     glossary = glossary.strip()[:1000]
     if example is not None:
         example = example.strip()[:1000] or None
@@ -134,16 +140,25 @@ def find_vocab_box(*, user_id: int, language: str, word: str) -> dict | None:
 
     The dictionary card uses this to decide whether to show an "Add to box 1"
     button (no row) or the current box badge (row exists).
+
+    Multi-word input is normalized the same way the dictionary lookup does:
+    internal whitespace becomes an underscore, so a user typing
+    ``"snap at"`` finds a row stored as ``"snap_at"`` (the convention
+    WordNet uses for multi-word lemmas) and vice versa.
     """
+    from ..util import normalize_word
     if not is_valid_lang(language):
         raise ValueError("invalid language")
-    if not isinstance(word, str) or not word.strip():
+    if not isinstance(word, str):
+        return None
+    word = normalize_word(word)
+    if not word:
         return None
     with get_conn() as conn:
         row = conn.execute(
             "SELECT id, leitner_box FROM vocab_items "
             "WHERE user_id=? AND language=? AND word=?",
-            (user_id, language, word.strip()[:200]),
+            (user_id, language, word[:200]),
         ).fetchone()
     if row is None:
         return None
@@ -288,6 +303,8 @@ def auto_add_from_lookup(*, user_id: int, entry: Any, auto_add_enabled: bool) ->
 
 
 def review_status(*, user_id: int, language: str) -> dict:
+    if not is_valid_lang(language):
+        raise ValueError("invalid language")
     counts = leitner.count_by_box(language, user_id)
     due = leitner.count_due(language, user_id)
     return {
