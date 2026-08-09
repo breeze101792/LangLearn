@@ -1,0 +1,82 @@
+/* LangLearn tokens — design system variables.
+   Light theme is the default; dark theme is applied via [data-theme="dark"]. */
+
+:root {
+  --bg: #FAF8F4;
+  --surface: #FFFFFF;
+  --surface-raised: #FFFFFF;
+  --surface-sunken: #F2EFE9;
+  --text-primary: #1F1D1A;
+  --text-secondary: #4A4640;
+  --text-muted: #8A857C;
+  --text-inverse: #FFFFFF;
+  --border: #E4DFD6;
+  --border-strong: #C9C2B6;
+  --accent: #3B4D8C;
+  --accent-hover: #2E3E70;
+  --accent-soft: #E6E9F2;
+  --accent-text: #1F2747;
+  --success: #2E6B4F;
+  --success-soft: #E0EFE7;
+  --warning: #9A6B1F;
+  --warning-soft: #F4E9D5;
+  --danger: #9E3B2F;
+  --danger-soft: #F4E1DD;
+  --ai: #6B4A8C;
+  --ai-soft: #EEE5F4;
+  --code-bg: #F2EFE9;
+  --code-text: #2A2722;
+  --shadow-1: 0 1px 2px rgba(31, 29, 26, 0.04), 0 1px 1px rgba(31, 29, 26, 0.03);
+  --shadow-2: 0 4px 16px rgba(31, 29, 26, 0.08), 0 1px 3px rgba(31, 29, 26, 0.06);
+  --focus-ring: 0 0 0 2px var(--surface), 0 0 0 4px var(--accent);
+
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "Cascadia Code", "JetBrains Mono", "Fira Code", Menlo, Consolas, monospace;
+
+  --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px;
+  --sp-5: 20px; --sp-6: 24px; --sp-8: 32px; --sp-10: 40px;
+  --sp-12: 48px; --sp-16: 64px; --sp-20: 80px;
+
+  --r-sm: 4px; --r-md: 6px; --r-lg: 10px; --r-xl: 14px;
+  --r-pill: 999px; --r-circle: 50%;
+
+  --dur-1: 120ms; --dur-2: 180ms;
+  --ease: cubic-bezier(0.2, 0, 0, 1);
+
+  --content-max: 880px;
+  --content-narrow: 640px;
+  --nav-max: 1080px;
+}
+
+[data-theme="dark"] {
+  --bg: #15171C;
+  --surface: #1E2128;
+  --surface-raised: #242832;
+  --surface-sunken: #111317;
+  --text-primary: #ECEEF2;
+  --text-secondary: #B4B8C2;
+  --text-muted: #6E7380;
+  --text-inverse: #15171C;
+  --border: #2E333D;
+  --border-strong: #444B58;
+  --accent: #7B8DD0;
+  --accent-hover: #93A4E2;
+  --accent-soft: #23293A;
+  --accent-text: #C8D2F2;
+  --success: #5FAE85;
+  --success-soft: #1E2D26;
+  --warning: #C99A4A;
+  --warning-soft: #2E2418;
+  --danger: #D46A5A;
+  --danger-soft: #2E1D1A;
+  --ai: #A98AD0;
+  --ai-soft: #2A2233;
+  --code-bg: #111317;
+  --code-text: #D4D8E2;
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-2: 0 6px 20px rgba(0, 0, 0, 0.5);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * { transition: none !important; animation: none !important; }
+}

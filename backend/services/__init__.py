@@ -1,0 +1,1 @@
+"""Services package — business logic, no HTTP knowledge."""

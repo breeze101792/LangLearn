@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en" data-theme="auto">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="LangLearn — multi-language vocabulary and phrase trainer">
+  <title>LangLearn</title>
+  <link rel="icon" href="/static/icons/icon.svg" type="image/svg+xml">
+  <link rel="icon" href="/static/icons/icon-32.png" sizes="32x32" type="image/png">
+  <link rel="icon" href="/static/icons/icon-16.png" sizes="16x16" type="image/png">
+  <link rel="apple-touch-icon" href="/static/icons/icon-192.png" sizes="192x192">
+  <link rel="manifest" href="/manifest.json">
+  <link rel="stylesheet" href="/static/css/tokens.css">
+  <link rel="stylesheet" href="/static/css/app.css">
+</head>
+<body>
+  <a href="#app-main" class="skip-link">Skip to content</a>
+  <nav class="nav" aria-label="Primary">
+    <div class="nav__inner">
+      <a href="#/dictionary" class="nav__brand">LangLearn</a>
+      <div class="nav__links" id="nav-links"></div>
+      <div class="lang-switcher" id="lang-switcher"></div>
+      <button class="nav__icon-btn" id="theme-toggle" aria-label="Cycle theme" title="Cycle theme">◐</button>
+    </div>
+  </nav>
+  <main id="app-main" class="container"></main>
+  <div class="toast-stack" id="toast-stack" role="region" aria-label="Notifications" aria-live="polite"></div>
+
+  <script type="module" src="/static/js/main.js"></script>
+</body>
+</html>

@@ -1,0 +1,1 @@
+"""Blueprint package — Flask blueprints, one per resource."""
