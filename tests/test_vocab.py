@@ -518,3 +518,626 @@ def test_dictionary_lookup_payload_in_vocab_false_when_missing(fresh):
     assert body["in_vocab"] is False
     assert body["leitner_box"] is None
     assert body["vocab_id"] is None
+
+
+# --- input validation on add_vocab ----------------------------------------
+
+def test_add_vocab_rejects_invalid_language(fresh):
+    from backend.services import vocab as v
+    with pytest.raises(ValueError, match="language"):
+        v.add_vocab(user_id=1, language="ENG123", word="x", source="user",
+                    glossary="g")
+
+
+def test_add_vocab_rejects_empty_word(fresh):
+    from backend.services import vocab as v
+    with pytest.raises(ValueError, match="word"):
+        v.add_vocab(user_id=1, language="es", word="", source="user", glossary="g")
+
+
+def test_add_vocab_rejects_whitespace_word(fresh):
+    from backend.services import vocab as v
+    with pytest.raises(ValueError, match="word"):
+        v.add_vocab(user_id=1, language="es", word="   ", source="user",
+                    glossary="g")
+
+
+def test_add_vocab_rejects_non_string_word(fresh):
+    from backend.services import vocab as v
+    with pytest.raises(ValueError, match="word"):
+        v.add_vocab(user_id=1, language="es", word=123, source="user",
+                    glossary="g")
+
+
+def test_add_vocab_rejects_empty_glossary(fresh):
+    from backend.services import vocab as v
+    with pytest.raises(ValueError, match="glossary"):
+        v.add_vocab(user_id=1, language="es", word="x", source="user",
+                    glossary="")
+
+
+def test_add_vocab_rejects_invalid_source(fresh):
+    from backend.services import vocab as v
+    with pytest.raises(ValueError, match="source"):
+        v.add_vocab(user_id=1, language="es", word="x", source="google",
+                    glossary="g")
+
+
+def test_add_vocab_strips_and_truncates_word(fresh):
+    from backend.services import vocab as v
+    long_word = "x" * 300
+    res = v.add_vocab(user_id=1, language="es", word=f"  {long_word}  ",
+                      source="user", glossary="g")
+    assert len(res["word"]) == 200
+
+
+def test_add_vocab_strips_and_truncates_glossary(fresh):
+    from backend.services import vocab as v
+    long = "g" * 1500
+    res = v.add_vocab(user_id=1, language="es", word="x", source="user",
+                      glossary=f"  {long}  ")
+    items = v.list_vocab(user_id=1, language="es")
+    assert len(items[0]["glossary"]) == 1000
+
+
+def test_add_vocab_truncates_pos(fresh):
+    from backend.services import vocab as v
+    res = v.add_vocab(user_id=1, language="es", word="x", source="user",
+                      glossary="g", pos="p" * 100)
+    items = v.list_vocab(user_id=1, language="es")
+    assert len(items[0]["pos"]) == 32
+
+
+def test_add_vocab_negative_sense_idx_coerced_to_zero(fresh):
+    from backend.services import vocab as v
+    res = v.add_vocab(user_id=1, language="es", word="x", source="user",
+                      glossary="g", sense_idx=-5)
+    items = v.list_vocab(user_id=1, language="es")
+    assert items[0]["sense_idx"] == 0
+
+
+def test_add_vocab_strips_empty_example_to_none(fresh):
+    from backend.services import vocab as v
+    res = v.add_vocab(user_id=1, language="es", word="x", source="user",
+                      glossary="g", example="   ")
+    items = v.list_vocab(user_id=1, language="es")
+    assert items[0]["example"] is None
+
+
+# --- delete / undo restore edge cases -------------------------------------
+
+def test_delete_vocab_unknown_id_raises(fresh):
+    from backend.services import vocab as v
+    with pytest.raises(LookupError):
+        v.delete_vocab(user_id=1, vocab_id=9999)
+
+
+def test_restore_vocab_unknown_token_raises(fresh):
+    from backend.services import vocab as v
+    with pytest.raises(LookupError):
+        v.restore_vocab(user_id=1, undo_token="bogus-token")
+
+
+def test_delete_vocab_returns_undo_ttl_in_response(fresh):
+    res = _seed_vocab(fresh)
+    from backend.services import vocab as v
+    out = v.delete_vocab(user_id=1, vocab_id=res["id"])
+    assert out["ttl_seconds"] == v.UNDO_TTL_SECONDS
+
+
+def test_restore_vocab_round_trip_preserves_box(fresh):
+    from backend.services import vocab as v
+    res = v.add_vocab(user_id=1, language="es", word="hola", source="user",
+                      glossary="hi")
+    v.set_box(user_id=1, vocab_id=res["id"], box=4)
+    del_res = v.delete_vocab(user_id=1, vocab_id=res["id"])
+    v.restore_vocab(user_id=1, undo_token=del_res["undo_token"])
+    items = v.list_vocab(user_id=1, language="es")
+    assert items[0]["leitner_box"] == 4
+
+
+# --- list_vocab ordering and limits ---------------------------------------
+
+def test_list_vocab_orders_by_added_at_desc(fresh):
+    """Newer added_at first. Use explicit added_at to avoid second-resolution
+    collisions when inserts happen in the same tick."""
+    from backend.services import vocab as v
+    from backend.db import transaction
+    a = v.add_vocab(user_id=1, language="es", word="first", source="user",
+                    glossary="g")
+    b = v.add_vocab(user_id=1, language="es", word="second", source="user",
+                    glossary="g")
+    c = v.add_vocab(user_id=1, language="es", word="third", source="user",
+                    glossary="g")
+    with transaction() as conn:
+        conn.execute("UPDATE vocab_items SET added_at='2020-01-01' WHERE id=?",
+                     (a["id"],))
+        conn.execute("UPDATE vocab_items SET added_at='2021-01-01' WHERE id=?",
+                     (b["id"],))
+        conn.execute("UPDATE vocab_items SET added_at='2022-01-01' WHERE id=?",
+                     (c["id"],))
+    items = v.list_vocab(user_id=1, language="es")
+    assert [i["word"] for i in items] == ["third", "second", "first"]
+
+
+def test_list_vocab_clamps_huge_limit(fresh):
+    from backend.services import vocab as v
+    items = v.list_vocab(user_id=1, language="es", limit=99999)
+    # The function clamps to <=500; we only care it didn't raise.
+    assert items == []
+
+
+def test_list_vocab_clamps_negative_limit(fresh):
+    from backend.services import vocab as v
+    items = v.list_vocab(user_id=1, language="es", limit=-5)
+    # Negative limit gets coerced to 1, not a crash.
+    assert items == []
+
+
+def test_list_vocab_clamps_negative_offset(fresh):
+    from backend.services import vocab as v
+    items = v.list_vocab(user_id=1, language="es", offset=-10)
+    assert items == []
+
+
+def test_list_vocab_other_user_isolated(fresh):
+    _seed_vocab(fresh, word="a")
+    from backend.services import vocab as v
+    # user_id=2 is never seeded but the FK is loose in test; ensure we can
+    # still query without seeing user 1's data.
+    items = v.list_vocab(user_id=2, language="es")
+    assert items == []
+
+
+def test_list_vocab_other_language_isolated(fresh):
+    _seed_vocab(fresh, word="casa", lang="es")
+    from backend.services import vocab as v
+    items = v.list_vocab(user_id=1, language="fr")
+    assert items == []
+
+
+def test_count_vocab_invalid_language(fresh):
+    from backend.services import vocab as v
+    with pytest.raises(ValueError):
+        v.count_vocab(user_id=1, language="!!")
+
+
+def test_list_vocab_invalid_language(fresh):
+    from backend.services import vocab as v
+    with pytest.raises(ValueError):
+        v.list_vocab(user_id=1, language="!!")
+
+
+# --- review_next edge cases -----------------------------------------------
+
+def test_review_next_invalid_language(fresh):
+    from backend.services import vocab as v
+    with pytest.raises(ValueError):
+        v.review_next(user_id=1, language="!!", n=10)
+
+
+def test_review_next_excludes_future_due(fresh):
+    from backend.services import vocab as v
+    res = v.add_vocab(user_id=1, language="es", word="x", source="user",
+                      glossary="g")
+    # Push into box 5 -> 30 days out, so it shouldn't be due.
+    v.set_box(user_id=1, vocab_id=res["id"], box=5)
+    items = v.review_next(user_id=1, language="es", n=10)
+    assert items == []
+
+
+def test_review_next_includes_overdue_items(fresh):
+    from backend.services import vocab as v
+    from backend.db import transaction
+    res = v.add_vocab(user_id=1, language="es", word="x", source="user",
+                      glossary="g")
+    # Force this row to be overdue.
+    with transaction() as conn:
+        conn.execute(
+            "UPDATE vocab_items SET next_due='1999-01-01 00:00:00' WHERE id=?",
+            (res["id"],),
+        )
+    items = v.review_next(user_id=1, language="es", n=10)
+    assert any(i["word"] == "x" for i in items)
+
+
+def test_review_next_n_is_clamped_to_50(fresh):
+    from backend.services import vocab as v
+    # Add a due item, then request a huge N. We just check it doesn't crash.
+    v.add_vocab(user_id=1, language="es", word="x", source="user", glossary="g")
+    items = v.review_next(user_id=1, language="es", n=999)
+    assert isinstance(items, list)
+
+
+# --- review_status edge cases ---------------------------------------------
+
+def test_review_status_empty_language(fresh):
+    from backend.services import vocab as v
+    out = v.review_status(user_id=1, language="en")
+    assert out["due"] == 0
+    assert all(v == 0 for v in out["by_box"].values())
+    assert sorted(out["by_box"].keys()) == [1, 2, 3, 4, 5]
+
+
+def test_review_status_ignores_invalid_language(fresh):
+    """review_status never raises on bad input — the underlying leitner
+    helpers just return empty dicts. The HTTP layer validates the lang
+    parameter before it reaches here."""
+    from backend.services import vocab as v
+    out = v.review_status(user_id=1, language="!!")
+    assert out["due"] == 0
+    assert sum(out["by_box"].values()) == 0
+
+
+# --- apply_review_grade lookup error --------------------------------------
+
+def test_apply_review_grade_unknown_vocab_raises(fresh):
+    from backend.services import vocab as v
+    with pytest.raises(LookupError):
+        v.apply_review_grade(user_id=1, vocab_id=9999, grade_value="easy")
+
+
+def test_apply_review_grade_returns_new_box_and_due(fresh):
+    res = _seed_vocab(fresh)
+    from backend.services import vocab as v
+    out = v.apply_review_grade(user_id=1, vocab_id=res["id"], grade_value="easy")
+    assert "vocab_id" in out
+    assert "leitner_box" in out
+    assert "next_due" in out
+
+
+# --- find_vocab_box edge cases ---------------------------------------------
+
+def test_find_vocab_box_empty_word_returns_none(fresh):
+    from backend.services import vocab as v
+    assert v.find_vocab_box(user_id=1, language="en", word="") is None
+    assert v.find_vocab_box(user_id=1, language="en", word="   ") is None
+
+
+def test_find_vocab_box_non_string_word_returns_none(fresh):
+    from backend.services import vocab as v
+    assert v.find_vocab_box(user_id=1, language="en", word=None) is None
+    assert v.find_vocab_box(user_id=1, language="en", word=42) is None
+
+
+def test_find_vocab_box_word_is_stripped_and_truncated(fresh):
+    long_word = "a" * 300
+    from backend.services import vocab as v
+    res = v.add_vocab(user_id=1, language="en", word=long_word, source="user",
+                      glossary="g")
+    out = v.find_vocab_box(user_id=1, language="en", word=f"  {long_word}  ")
+    assert out["id"] == res["id"]
+
+
+# --- auto_add_from_lookup edge cases ---------------------------------------
+
+def test_auto_add_skips_when_entry_has_no_senses(fresh):
+    from backend.services.dictionaries.base import WordEntry
+    from backend.services import vocab as v
+
+    entry = WordEntry(word="x", language="en", senses=[], source="llm")
+    added = v.auto_add_from_lookup(user_id=1, entry=entry, auto_add_enabled=True)
+    assert added is False
+
+
+def test_auto_add_skips_when_sense_has_no_definitions(fresh):
+    from backend.services.dictionaries.base import Sense, WordEntry
+    from backend.services import vocab as v
+
+    entry = WordEntry(
+        word="x", language="en", source="llm",
+        senses=[Sense(pos="noun", definitions=[])],
+    )
+    added = v.auto_add_from_lookup(user_id=1, entry=entry, auto_add_enabled=True)
+    assert added is False
+
+
+def test_auto_add_logs_and_returns_false_on_validation_error(fresh):
+    """An invalid language (somehow) must not crash auto-add."""
+    from backend.services.dictionaries.base import Definition, Sense, WordEntry
+    from backend.services import vocab as v
+
+    entry = WordEntry(
+        word="x", language="bad-lang!", source="llm",
+        senses=[Sense(pos="noun", definitions=[Definition(glossary="g")])],
+    )
+    added = v.auto_add_from_lookup(user_id=1, entry=entry, auto_add_enabled=True)
+    assert added is False
+
+
+def test_auto_add_defaults_source_to_llm_when_none(fresh):
+    """If entry.source is missing, auto-add defaults it to 'llm'."""
+    from backend.services.dictionaries.base import Definition, Sense, WordEntry
+    from backend.services import vocab as v
+
+    entry = WordEntry(
+        word="auto", language="en", source="",
+        senses=[Sense(pos="noun", definitions=[Definition(glossary="g")])],
+    )
+    v.auto_add_from_lookup(user_id=1, entry=entry, auto_add_enabled=True)
+    items = v.list_vocab(user_id=1, language="en")
+    assert items[0]["source"] == "llm"
+
+
+# --- HTTP endpoint validation ---------------------------------------------
+
+def test_list_vocab_endpoint_missing_lang(fresh):
+    from backend.app import create_app
+    app = create_app()
+    client = app.test_client()
+    r = client.get("/api/vocab")
+    assert r.status_code == 400
+    assert r.get_json()["code"] == "invalid_lang"
+
+
+def test_list_vocab_endpoint_invalid_lang(fresh):
+    from backend.app import create_app
+    app = create_app()
+    client = app.test_client()
+    r = client.get("/api/vocab?lang=ENG123")
+    assert r.status_code == 400
+
+
+def test_add_vocab_endpoint_creates(fresh):
+    from backend.app import create_app
+    app = create_app()
+    client = app.test_client()
+    r = client.post("/api/vocab", json={
+        "language": "en", "word": "test", "source": "user",
+        "glossary": "trial", "pos": "noun",
+    })
+    assert r.status_code == 200
+    body = r.get_json()
+    assert body["data"]["created"] is True
+
+
+def test_add_vocab_endpoint_invalid_input_returns_400(fresh):
+    from backend.app import create_app
+    app = create_app()
+    client = app.test_client()
+    r = client.post("/api/vocab", json={"language": "en", "word": "x",
+                                          "source": "user"})
+    assert r.status_code == 400
+
+
+def test_delete_vocab_endpoint_unknown_id_404(fresh):
+    from backend.app import create_app
+    app = create_app()
+    client = app.test_client()
+    r = client.delete("/api/vocab/9999")
+    assert r.status_code == 404
+
+
+def test_delete_vocab_endpoint_happy_path(fresh):
+    res = _seed_vocab(fresh)
+    from backend.app import create_app
+    app = create_app()
+    client = app.test_client()
+    r = client.delete(f"/api/vocab/{res['id']}")
+    assert r.status_code == 200
+    assert "undo_token" in r.get_json()["data"]
+
+
+def test_restore_vocab_endpoint_happy_path(fresh):
+    res = _seed_vocab(fresh)
+    from backend.app import create_app
+    app = create_app()
+    client = app.test_client()
+    del_r = client.delete(f"/api/vocab/{res['id']}")
+    token = del_r.get_json()["data"]["undo_token"]
+    r = client.post(f"/api/vocab/{res['id']}/restore", json={"undo_token": token})
+    assert r.status_code == 200
+
+
+def test_restore_vocab_endpoint_missing_token_400(fresh):
+    res = _seed_vocab(fresh)
+    from backend.app import create_app
+    app = create_app()
+    client = app.test_client()
+    client.delete(f"/api/vocab/{res['id']}")
+    r = client.post(f"/api/vocab/{res['id']}/restore", json={})
+    assert r.status_code == 400
+
+
+def test_restore_vocab_endpoint_bad_token_type_400(fresh):
+    res = _seed_vocab(fresh)
+    from backend.app import create_app
+    app = create_app()
+    client = app.test_client()
+    client.delete(f"/api/vocab/{res['id']}")
+    r = client.post(f"/api/vocab/{res['id']}/restore", json={"undo_token": 123})
+    assert r.status_code == 400
+
+
+def test_restore_vocab_endpoint_unknown_token_404(fresh):
+    res = _seed_vocab(fresh)
+    from backend.app import create_app
+    app = create_app()
+    client = app.test_client()
+    r = client.post(f"/api/vocab/{res['id']}/restore",
+                    json={"undo_token": "no-such-token"})
+    assert r.status_code == 404
+
+
+def test_patch_vocab_endpoint_box_must_be_int_not_bool(fresh):
+    res = _seed_vocab(fresh)
+    from backend.app import create_app
+    app = create_app()
+    client = app.test_client()
+    # Python bool is an int subclass; the validator rejects it explicitly.
+    r = client.patch(f"/api/vocab/{res['id']}", json={"leitner_box": True})
+    assert r.status_code == 400
+
+
+def test_patch_vocab_endpoint_box_must_be_int_not_string(fresh):
+    res = _seed_vocab(fresh)
+    from backend.app import create_app
+    app = create_app()
+    client = app.test_client()
+    r = client.patch(f"/api/vocab/{res['id']}", json={"leitner_box": "3"})
+    assert r.status_code == 400
+
+
+def test_review_status_endpoint_happy(fresh):
+    _seed_vocab(fresh, word="a")
+    from backend.app import create_app
+    app = create_app()
+    client = app.test_client()
+    r = client.get("/api/vocab/review/status?lang=es")
+    assert r.status_code == 200
+    assert r.get_json()["data"]["due"] >= 1
+
+
+def test_review_status_endpoint_invalid_lang(fresh):
+    from backend.app import create_app
+    app = create_app()
+    client = app.test_client()
+    r = client.get("/api/vocab/review/status?lang=ENG")
+    assert r.status_code == 400
+
+
+def test_review_next_endpoint_happy(fresh):
+    _seed_vocab(fresh)
+    from backend.app import create_app
+    app = create_app()
+    client = app.test_client()
+    r = client.get("/api/vocab/review/next?lang=es&n=5")
+    assert r.status_code == 200
+    body = r.get_json()["data"]
+    assert body["count"] >= 1
+    assert isinstance(body["items"], list)
+
+
+def test_review_next_endpoint_invalid_lang(fresh):
+    from backend.app import create_app
+    app = create_app()
+    client = app.test_client()
+    r = client.get("/api/vocab/review/next?lang=ENG")
+    assert r.status_code == 400
+
+
+def test_review_grade_endpoint_happy(fresh):
+    res = _seed_vocab(fresh)
+    from backend.app import create_app
+    app = create_app()
+    client = app.test_client()
+    r = client.post("/api/vocab/review/grade", json={
+        "vocab_id": res["id"], "grade": "easy",
+    })
+    assert r.status_code == 200
+    assert r.get_json()["data"]["leitner_box"] == 2
+
+
+def test_review_grade_endpoint_hard(fresh):
+    res = _seed_vocab(fresh)
+    from backend.app import create_app
+    app = create_app()
+    client = app.test_client()
+    r = client.post("/api/vocab/review/grade", json={
+        "vocab_id": res["id"], "grade": "hard",
+    })
+    assert r.status_code == 200
+    assert r.get_json()["data"]["leitner_box"] == 1
+
+
+def test_review_grade_endpoint_missing_vocab_id(fresh):
+    from backend.app import create_app
+    app = create_app()
+    client = app.test_client()
+    r = client.post("/api/vocab/review/grade", json={"grade": "easy"})
+    assert r.status_code == 400
+
+
+def test_review_grade_endpoint_missing_grade(fresh):
+    res = _seed_vocab(fresh)
+    from backend.app import create_app
+    app = create_app()
+    client = app.test_client()
+    r = client.post("/api/vocab/review/grade", json={"vocab_id": res["id"]})
+    assert r.status_code == 400
+
+
+def test_review_grade_endpoint_unknown_vocab_404(fresh):
+    from backend.app import create_app
+    app = create_app()
+    client = app.test_client()
+    r = client.post("/api/vocab/review/grade", json={
+        "vocab_id": 9999, "grade": "easy",
+    })
+    assert r.status_code == 404
+
+
+def test_review_grade_endpoint_non_int_vocab_id(fresh):
+    from backend.app import create_app
+    app = create_app()
+    client = app.test_client()
+    r = client.post("/api/vocab/review/grade", json={
+        "vocab_id": "not-an-int", "grade": "easy",
+    })
+    assert r.status_code == 400
+
+
+def test_add_from_entry_returns_box_in_response(fresh):
+    from backend.app import create_app
+    app = create_app()
+    client = app.test_client()
+    r = client.post("/api/vocab/add-from-entry", json={
+        "lang": "en", "word": "kiwi", "source": "user",
+        "glossary": "small green fruit",
+    })
+    assert r.status_code == 200
+    assert r.get_json()["data"]["leitner_box"] == 1
+
+
+def test_add_from_entry_preserves_box_on_refresh(fresh):
+    from backend.services import vocab as v
+    res = v.add_vocab(user_id=1, language="en", word="kiwi", source="user",
+                      glossary="old")
+    v.set_box(user_id=1, vocab_id=res["id"], box=2)
+    from backend.app import create_app
+    app = create_app()
+    client = app.test_client()
+    r = client.post("/api/vocab/add-from-entry", json={
+        "lang": "en", "word": "kiwi", "source": "user",
+        "glossary": "new",
+    })
+    assert r.status_code == 200
+    assert r.get_json()["data"]["leitner_box"] == 2
+
+
+def test_add_from_entry_rejects_bad_lang(fresh):
+    from backend.app import create_app
+    app = create_app()
+    client = app.test_client()
+    r = client.post("/api/vocab/add-from-entry", json={
+        "lang": "ENG123", "word": "kiwi", "source": "user",
+        "glossary": "g",
+    })
+    assert r.status_code == 400
+
+
+def test_add_from_entry_rejects_empty_word(fresh):
+    from backend.app import create_app
+    app = create_app()
+    client = app.test_client()
+    r = client.post("/api/vocab/add-from-entry", json={
+        "lang": "en", "word": "  ", "source": "user",
+        "glossary": "g",
+    })
+    assert r.status_code == 400
+
+
+def test_lookup_endpoint_returns_hit_with_leading_trailing_space(fresh):
+    """find_vocab_box strips the query; trailing/leading whitespace is
+    tolerated."""
+    from backend.services import vocab as v
+    res = v.add_vocab(user_id=1, language="en", word="snap", source="user",
+                      glossary="g")
+    from backend.app import create_app
+    app = create_app()
+    client = app.test_client()
+    r = client.get("/api/vocab/lookup?lang=en&word=%20snap%20")
+    assert r.status_code == 200
+    body = r.get_json()["data"]
+    assert body["in_vocab"] is True
+    assert body["vocab_id"] == res["id"]
