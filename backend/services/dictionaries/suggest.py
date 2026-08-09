@@ -51,6 +51,28 @@ def _wordnet_lemma_set() -> frozenset[str]:
         return frozenset()
 
 
+def warmup() -> frozenset[str]:
+    """Eagerly build the suggestion index at app startup.
+
+    The first ``/suggest`` request would otherwise pay the cost of resolving
+    the WordNet corpus and enumerating tens of thousands of lemma names,
+    which is slow enough to delay the live dropdown by several seconds on a
+    cold start.  Both work units are idempotent and ``lru_cache``-backed, so
+    calling them here simply primes the cache for all later requests.
+
+    Fail-soft: never raises, so a missing or broken WordNet installation
+    can't break app startup.
+    """
+    log.info("priming dictionary suggestion index…")
+    try:
+        lemmas = _wordnet_lemma_set()
+    except Exception as e:  # noqa: BLE001
+        log.warning("suggestion warmup failed: %s", e)
+        return frozenset()
+    log.info("suggestion index ready (%d lemmas)", len(lemmas))
+    return lemmas
+
+
 def _vocab_candidates(user_id: int, lang: str) -> list[str]:
     """Distinct, lowercased words in the user's vocab for `lang`."""
     from ...db import get_conn
@@ -82,6 +104,7 @@ def prefix(lang: str, user_id: int, query: str, limit: int = DEFAULT_LIMIT) -> l
 
     The query is normalized via `util.normalize_word` so spaces become
     underscores, matching the convention used by the dictionary lookup.
+    Returns display words (spaces, not underscores).
     """
     q = normalize_word(query).lower()
     if not q:
@@ -92,7 +115,19 @@ def prefix(lang: str, user_id: int, query: str, limit: int = DEFAULT_LIMIT) -> l
     matches = [w for w in pool if w.startswith(q)]
     if not matches:
         return []
-    return _shortest_first(matches)[: max(1, min(limit, MAX_LIMIT))]
+    return _display_words(_shortest_first(matches)[: max(1, min(limit, MAX_LIMIT))])
+
+
+def _display_words(words: Iterable[str]) -> list[str]:
+    """Render internal underscore-indexed entries for humans.
+
+    Both WordNet and the user's vocab table index multi-word expressions
+    with underscores (``snap_at``). That is purely an internal lookup token,
+    so suggestions carry spaces instead: ``snap at``.  Matching, distance,
+    and de-duplication all happen on the underscore form; this conversion is
+    the last step before a value leaves the service.
+    """
+    return [w.replace("_", " ") for w in words]
 
 
 def _shortest_first(words: list[str]) -> list[str]:
@@ -147,7 +182,8 @@ def fuzzy(lang: str, user_id: int, query: str, limit: int = DEFAULT_LIMIT) -> li
     """Return up to `limit` close matches for `query`, best (lowest distance) first.
 
     Returns [] for queries shorter than `MIN_QUERY_LEN_FOR_FUZZY` to avoid noisy
-    suggestions on very short input.
+    suggestions on very short input. Returns display words (spaces, not
+    underscores).
     """
     q = normalize_word(query).lower()
     if len(q) < MIN_QUERY_LEN_FOR_FUZZY:
@@ -181,4 +217,4 @@ def fuzzy(lang: str, user_id: int, query: str, limit: int = DEFAULT_LIMIT) -> li
         out.append(w)
         if len(out) >= max(1, min(limit, MAX_LIMIT)):
             break
-    return out
+    return _display_words(out)

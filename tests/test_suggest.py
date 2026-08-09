@@ -70,6 +70,49 @@ def test_prefix_uses_user_vocab_when_no_wordnet(fresh):
     assert "mango" in out
 
 
+def test_prefix_shows_underscore_vocab_as_spaces(fresh):
+    """Previously looked-up multi-word vocab (indexed with underscores) must
+    also surface as spaces, matching the general display rule."""
+    from backend.db import transaction
+
+    with transaction() as conn:
+        conn.execute(
+            "INSERT INTO vocab_items (user_id, language, word, source, glossary) "
+            "VALUES (?, ?, ?, 'llm', 'g')",
+            (1, "es", "manzana_roja"),
+        )
+    from backend.services.dictionaries import suggest
+
+    out = suggest.prefix("es", 1, "manzana", limit=8)
+    assert "manzana roja" in out
+    assert all("_" not in w for w in out)
+
+
+def test_warmup_populates_lemma_cache(fresh):
+    """``warmup()`` must prime the WordNet lemma cache so the first live
+    /suggest request doesn't pay a multi-second cold-start cost."""
+    from backend.services.dictionaries import suggest
+
+    primed = suggest.warmup()
+    assert primed, "warmup should populate at least the WordNet lemma set"
+    # Subsequent calls must hit the cache (no work, same object).
+    assert suggest._wordnet_lemma_set() is primed
+
+
+def test_create_app_runs_warmup(fresh):
+    """``create_app`` must trigger warmup so production startup primes the index."""
+    from backend.app import create_app
+    from backend.services.dictionaries import suggest
+
+    suggest._wordnet_lemma_set.cache_clear()
+
+    create_app()
+
+    # After app construction the lemma cache must be primed (non-empty),
+    # i.e. the first /suggest request no longer pays the cold-start cost.
+    assert suggest._wordnet_lemma_set()
+
+
 def test_prefix_excludes_words_not_starting_with_query(fresh):
     from backend.db import transaction
     from backend.services.dictionaries import suggest
@@ -261,13 +304,28 @@ def test_lookup_collapses_multiple_spaces(fresh):
 
 
 def test_suggest_prefix_normalizes_spaces(fresh):
+    """Typing 'snap at' matches the underscore-indexed entry but the dropdown
+    shows the human-readable spaced form, not the internal WordNet token."""
     from backend.app import create_app
 
     app = create_app()
     client = app.test_client()
     r = client.get("/api/dictionary/suggest?lang=en&q=snap+at&limit=5")
     assert r.status_code == 200
-    assert r.get_json()["data"]["suggestions"] == ["snap_at"]
+    assert r.get_json()["data"]["suggestions"] == ["snap at"]
+
+
+def test_suggest_prefix_never_leaks_underscores(fresh):
+    """Underscore-indexed multi-word lemmas must not appear in the dropdown."""
+    from backend.app import create_app
+
+    app = create_app()
+    client = app.test_client()
+    r = client.get("/api/dictionary/suggest?lang=en&q=snap&limit=25")
+    assert r.status_code == 200
+    suggestions = r.get_json()["data"]["suggestions"]
+    assert suggestions
+    assert all("_" not in w for w in suggestions)
 
 
 def test_suggest_prefix_preserves_hyphens(fresh):

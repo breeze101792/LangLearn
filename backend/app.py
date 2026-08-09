@@ -15,6 +15,7 @@ from flask import Flask, jsonify, send_from_directory
 from . import config
 from .db import init_schema
 from .services.dictionaries import registry as dict_registry
+from .services.dictionaries import suggest as suggest_svc
 from .services import settings as settings_svc
 from .util import err
 
@@ -38,6 +39,7 @@ def create_app() -> Flask:
 
     init_schema()
     dict_registry.bootstrap()
+    suggest_svc.warmup()
     settings_svc.create_default_settings()
     _register_blueprints(app)
 
