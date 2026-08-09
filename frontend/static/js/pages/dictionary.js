@@ -358,7 +358,7 @@ function pickSelectedSuggestion(suggestEl) {
 function renderEmptyState(host) {
   host.innerHTML = `
     <div class="empty-state">
-      <div class="empty-state__icon">�</div>
+      <div class="empty-state__icon">🔍</div>
       <div class="empty-state__title">No word looked up yet</div>
       <div class="empty-state__msg">Type a word above to look it up. Looked-up words are added to your vocab list automatically.</div>
     </div>
