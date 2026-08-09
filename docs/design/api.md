@@ -24,8 +24,10 @@ default settings if missing.
 #### `PUT /api/settings`
 
 Partial update. Allowed keys: `active_language`, `auto_add_vocab`,
-`review_session_size`, `explanation_primary`, `explanation_secondary`,
+`page_size`, `explanation_primary`, `explanation_secondary`,
 `dict_chain_json`, `theme`, `show_readings`. Unknown keys → 400.
+`page_size` (5..50) is shared between Review session size and the
+Vocabulary list page size.
 
 ### Languages
 
@@ -82,9 +84,12 @@ Returns `{"providers": ["llm", "wordnet"]}` (sorted).
 
 ### Vocab
 
-#### `GET /api/vocab?lang=&limit=&offset=`
+#### `GET /api/vocab?lang=&limit=&offset=&box=`
 
-List vocab items for one language, newest first.
+List vocab items for one language, newest first. `box` (1..5) optionally
+restricts to items at that Leitner level. Response includes `total` (count
+of rows matching the filter, for pagination) and `by_box: {1..5}` so the
+UI can render level counts without an extra round-trip.
 
 #### `POST /api/vocab`
 
@@ -99,6 +104,12 @@ Delete + return `{deleted_id, undo_token, ttl_seconds: 5}`.
 
 Restore via the `undo_token` returned from DELETE. After 5s the token
 expires.
+
+#### `PATCH /api/vocab/<id>`
+
+Update mutable fields. Today only `leitner_box` (1..5) is supported;
+used by the Vocabulary page to let the user self-rate "I remember this
+at level N". Reschedules `next_due` using the Leitner interval table.
 
 #### `GET /api/vocab/review/status?lang=`
 

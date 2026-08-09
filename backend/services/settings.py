@@ -15,7 +15,7 @@ from ..util import is_valid_lang
 DEFAULTS: dict[str, Any] = {
     "active_language": config.DEFAULT_LANGUAGE,
     "auto_add_vocab": 1,
-    "review_session_size": 20,
+    "page_size": 20,
     "explanation_primary": "en",
     "explanation_secondary": None,
     "dict_chain_json": {},
@@ -60,7 +60,7 @@ def create_default_settings(user_id: int = config.DEFAULT_USER_ID) -> None:
     with get_conn() as conn:
         conn.execute(
             "INSERT OR IGNORE INTO settings ("
-            "  user_id, active_language, auto_add_vocab, review_session_size,"
+            "  user_id, active_language, auto_add_vocab, page_size,"
             "  explanation_primary, explanation_secondary, dict_chain_json,"
             "  theme, show_readings"
             ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -68,7 +68,7 @@ def create_default_settings(user_id: int = config.DEFAULT_USER_ID) -> None:
                 user_id,
                 DEFAULTS["active_language"],
                 DEFAULTS["auto_add_vocab"],
-                DEFAULTS["review_session_size"],
+                DEFAULTS["page_size"],
                 DEFAULTS["explanation_primary"],
                 DEFAULTS["explanation_secondary"],
                 chain_json,
@@ -140,13 +140,13 @@ def _coerce(key: str, value: Any) -> Any:
         return value
     if key == "auto_add_vocab" or key == "show_readings":
         return 1 if _truthy(value) else 0
-    if key == "review_session_size":
+    if key == "page_size":
         try:
             n = int(value)
         except (TypeError, ValueError):
-            raise ValueError("review_session_size must be int")
+            raise ValueError("page_size must be int")
         if not 5 <= n <= 50:
-            raise ValueError("review_session_size must be between 5 and 50")
+            raise ValueError("page_size must be between 5 and 50")
         return n
     if key == "theme":
         if value not in ("auto", "light", "dark"):
@@ -226,7 +226,7 @@ def _row_to_dict(row) -> dict:
         "user_id": row["user_id"],
         "active_language": row["active_language"],
         "auto_add_vocab": bool(row["auto_add_vocab"]),
-        "review_session_size": row["review_session_size"],
+        "page_size": row["page_size"],
         "explanation_primary": row["explanation_primary"],
         "explanation_secondary": row["explanation_secondary"],
         "dict_chain_json": chain,

@@ -35,7 +35,7 @@ language.
 user_id                INTEGER PRIMARY KEY
 active_language        TEXT NOT NULL DEFAULT 'en'
 auto_add_vocab         INTEGER NOT NULL DEFAULT 1
-review_session_size    INTEGER NOT NULL DEFAULT 20
+page_size              INTEGER NOT NULL DEFAULT 20  -- review session size AND vocab list page size (5..50)
 explanation_primary    TEXT NOT NULL DEFAULT 'en'
 explanation_secondary  TEXT
 dict_chain_json        TEXT NOT NULL DEFAULT '{}'   -- {lang: [{name, enabled}]}

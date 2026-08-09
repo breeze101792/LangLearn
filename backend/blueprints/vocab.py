@@ -18,9 +18,23 @@ def list_vocab():
         return jsonify(err("invalid language", code="invalid_lang")), 400
     limit = int(request.args.get("limit", 100))
     offset = int(request.args.get("offset", 0))
-    items = vocab_svc.list_vocab(user_id=config.DEFAULT_USER_ID, language=lang,
-                                 limit=limit, offset=offset)
-    return ok({"items": items, "limit": limit, "offset": offset})
+    box = None
+    raw_box = request.args.get("box")
+    if raw_box is not None and raw_box != "":
+        try:
+            box = int(raw_box)
+        except (TypeError, ValueError):
+            return jsonify(err("box must be an integer 1-5", code="invalid_box")), 400
+    try:
+        items = vocab_svc.list_vocab(user_id=config.DEFAULT_USER_ID, language=lang,
+                                     limit=limit, offset=offset, box=box)
+        total = vocab_svc.count_vocab(user_id=config.DEFAULT_USER_ID, language=lang, box=box)
+    except ValueError as e:
+        return jsonify(err(str(e), code="invalid_input")), 400
+    return ok({"items": items, "limit": limit, "offset": offset,
+               "box": box, "total": total,
+               "by_box": vocab_svc.review_status(
+                   user_id=config.DEFAULT_USER_ID, language=lang)["by_box"]})
 
 
 @bp.post("")
@@ -52,6 +66,28 @@ def restore_vocab(vocab_id: int):
         res = vocab_svc.restore_vocab(user_id=config.DEFAULT_USER_ID, undo_token=token)
     except LookupError as e:
         return jsonify(err(str(e), code="not_found")), 404
+    return ok(res)
+
+
+@bp.patch("/<int:vocab_id>")
+def update_vocab(vocab_id: int):
+    """Update mutable fields on a vocab item. Today only ``leitner_box``
+    is supported (used by the Vocabulary page to let the user self-rate
+    "I remember this at level N")."""
+    body = request.get_json(silent=True) or {}
+    if not isinstance(body, dict):
+        return jsonify(err("body must be an object", code="invalid_input")), 400
+    box = body.get("leitner_box")
+    if box is None:
+        return jsonify(err("leitner_box required", code="invalid_input")), 400
+    if not isinstance(box, int) or isinstance(box, bool):
+        return jsonify(err("leitner_box must be an integer 1-5", code="invalid_input")), 400
+    try:
+        res = vocab_svc.set_box(user_id=config.DEFAULT_USER_ID, vocab_id=vocab_id, box=box)
+    except LookupError as e:
+        return jsonify(err(str(e), code="not_found")), 404
+    except ValueError as e:
+        return jsonify(err(str(e), code="invalid_input")), 400
     return ok(res)
 
 

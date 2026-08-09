@@ -20,7 +20,7 @@ def test_get_settings_creates_default(fresh):
     s1 = s.get_settings()
     assert s1["active_language"] == "en"
     assert s1["auto_add_vocab"] is True
-    assert s1["review_session_size"] == 20
+    assert s1["page_size"] == 20
     assert s1["explanation_primary"] == "en"
     assert s1["explanation_secondary"] is None
     assert s1["theme"] == "auto"
@@ -37,23 +37,23 @@ def test_update_settings_coerces_types(fresh):
     from backend.services import settings as s
     s.update_settings({
         "auto_add_vocab": False,
-        "review_session_size": 30,
+        "page_size": 30,
         "explanation_secondary": "zh",
         "theme": "dark",
     })
     s1 = s.get_settings()
     assert s1["auto_add_vocab"] is False
-    assert s1["review_session_size"] == 30
+    assert s1["page_size"] == 30
     assert s1["explanation_secondary"] == "zh"
     assert s1["theme"] == "dark"
 
 
-def test_review_session_size_bounds(fresh):
+def test_page_size_bounds(fresh):
     from backend.services import settings as s
     with pytest.raises(ValueError):
-        s.update_settings({"review_session_size": 100})
+        s.update_settings({"page_size": 100})
     with pytest.raises(ValueError):
-        s.update_settings({"review_session_size": 0})
+        s.update_settings({"page_size": 0})
 
 
 def test_invalid_language_rejected(fresh):

@@ -90,8 +90,8 @@ export function renderSettings(host) {
             </div>
           </div>
           <div class="settings__row">
-            <div class="settings__row__label">Review session size</div>
-            <input id="r-size" type="number" min="5" max="50" step="5" class="input" style="max-width: 120px" value="${s.review_session_size || 20}">
+            <div class="settings__row__label">Page size (review session / vocabulary list)</div>
+            <input id="r-size" type="number" min="5" max="50" step="5" class="input" style="max-width: 120px" value="${s.page_size || 20}">
           </div>
           <div class="settings__row">
             <div class="settings__row__label">Auto-add looked-up words to vocab</div>
@@ -150,7 +150,7 @@ export function renderSettings(host) {
     });
     main.querySelector("#r-size").addEventListener("change", (e) => {
       const v = parseInt(e.target.value, 10);
-      if (v >= 5 && v <= 50) { dirty.review_session_size = v; renderActions(); }
+      if (v >= 5 && v <= 50) { dirty.page_size = v; renderActions(); }
     });
     main.querySelector("#auto-add").addEventListener("change", (e) => {
       dirty.auto_add_vocab = e.target.checked;

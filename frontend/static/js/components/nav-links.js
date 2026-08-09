@@ -3,6 +3,7 @@
 const ROUTES = [
   { hash: "#/dictionary", label: "Dictionary" },
   { hash: "#/review",     label: "Review" },
+  { hash: "#/vocabulary", label: "Vocabulary" },
   { hash: "#/structures", label: "Structures" },
   { hash: "#/phrases",    label: "Phrases" },
   { hash: "#/settings",   label: "Settings" },

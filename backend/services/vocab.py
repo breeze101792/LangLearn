@@ -129,18 +129,77 @@ def _evict_undo_locked() -> None:
             break
 
 
-def list_vocab(*, user_id: int, language: str, limit: int = 100, offset: int = 0) -> list[dict]:
+def list_vocab(*, user_id: int, language: str, limit: int = 100, offset: int = 0,
+               box: int | None = None) -> list[dict]:
+    """List vocab rows for `language`, newest first.
+
+    `box` (1-5) optionally restricts the result to items at that Leitner box;
+    this powers the Vocabulary page's per-level view.
+    """
     if not is_valid_lang(language):
         raise ValueError("invalid language")
     limit = max(1, min(500, int(limit)))
     offset = max(0, int(offset))
+    where, params = _vocab_where(user_id, language, box)
+    params += [limit, offset]
     with get_conn() as conn:
         rows = conn.execute(
-            "SELECT * FROM vocab_items WHERE user_id=? AND language=? "
+            f"SELECT * FROM vocab_items WHERE {where} "
             "ORDER BY added_at DESC LIMIT ? OFFSET ?",
-            (user_id, language, limit, offset),
+            params,
         ).fetchall()
     return [dict(r) for r in rows]
+
+
+def count_vocab(*, user_id: int, language: str, box: int | None = None) -> int:
+    """Count vocab rows matching the same filter as ``list_vocab``.
+
+    Used by the Vocabulary page to compute total pages for pagination.
+    """
+    if not is_valid_lang(language):
+        raise ValueError("invalid language")
+    where, params = _vocab_where(user_id, language, box)
+    with get_conn() as conn:
+        row = conn.execute(
+            f"SELECT COUNT(*) AS c FROM vocab_items WHERE {where}", params,
+        ).fetchone()
+    return int(row["c"])
+
+
+def _vocab_where(user_id: int, language: str, box: int | None) -> tuple[str, list[Any]]:
+    where = "user_id=? AND language=?"
+    params: list[Any] = [user_id, language]
+    if box is not None:
+        if not isinstance(box, int) or not (leitner.MIN_BOX <= box <= leitner.MAX_BOX):
+            raise ValueError(f"box must be between {leitner.MIN_BOX} and {leitner.MAX_BOX}")
+        where += " AND leitner_box=?"
+        params.append(box)
+    return where, params
+
+
+def set_box(*, user_id: int, vocab_id: int, box: int) -> dict:
+    """Manually set a vocab item's Leitner box (and reschedule next_due).
+
+    Lets the user self-rate "I remember this at level N" without going through
+    the review flow. Resets ``next_due`` using the Leitner interval table so
+    future review picks it up at the right cadence.
+    """
+    if not isinstance(box, int) or not (leitner.MIN_BOX <= box <= leitner.MAX_BOX):
+        raise ValueError(f"box must be between {leitner.MIN_BOX} and {leitner.MAX_BOX}")
+    with transaction() as conn:
+        row = conn.execute(
+            "SELECT id FROM vocab_items WHERE id=? AND user_id=?",
+            (vocab_id, user_id),
+        ).fetchone()
+        if row is None:
+            raise LookupError("vocab item not found")
+        new_due = leitner.due_iso(box)
+        conn.execute(
+            "UPDATE vocab_items SET leitner_box=?, next_due=? "
+            "WHERE id=? AND user_id=?",
+            (box, new_due, vocab_id, user_id),
+        )
+    return {"vocab_id": vocab_id, "leitner_box": box, "next_due": new_due}
 
 
 def review_next(*, user_id: int, language: str, n: int = 20) -> list[dict]:
