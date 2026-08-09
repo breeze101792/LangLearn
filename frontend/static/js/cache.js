@@ -59,6 +59,18 @@ export const cache = {
     }
     return best;
   },
+  /**
+   * Walk `sources` in order and return the first provider that has an entry
+   * cached for `lang`+`word`. Used for fresh search-box lookups so the result
+   * resets to the leading provider of the chain on every new word.
+   */
+  getInChain(lang, word, sources) {
+    for (const source of sources || []) {
+      const hit = this.get(lang, word, source);
+      if (hit) return hit;
+    }
+    return null;
+  },
   set(lang, word, source, payload) {
     const k = keyFor(lang, word);
     const all = readAll();

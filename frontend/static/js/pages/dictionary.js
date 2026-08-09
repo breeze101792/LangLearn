@@ -17,6 +17,9 @@ let providerMetaLoaded = false;
 let lastLang = null;
 
 const lastLookup = { word: "", lang: "" };
+// Monotonic token so a slow in-flight response can't clobber the result of a
+// newer lookup (e.g. an AI request for the previous word landing late).
+let lookupToken = 0;
 
 export function renderDictionary(host) {
   const state = store.get();
@@ -348,6 +351,7 @@ function renderEmptyState(host) {
 
 async function doLookup(word, lang, providerOverride) {
   const resultHost = document.getElementById("dict-result");
+  const myToken = ++lookupToken;
   if (!word) {
     resultHost.innerHTML = `<div class="empty-state"><div class="empty-state__msg">Type a word to look up.</div></div>`;
     return;
@@ -362,10 +366,15 @@ async function doLookup(word, lang, providerOverride) {
   `;
 
   // 1) local cache hit. A forced lookup asks for a specific source, so only
-  // accept an entry produced by that provider; otherwise use whatever was
-  // cached for the word (most recent first).
-  const cached = cache.get(lang, word, providerOverride || null);
+  // accept an entry produced by that provider; otherwise walk the chain in
+  // order and use the first provider that has the word cached — this is what
+  // resets the dictionary back to the leading provider on a fresh search.
+  const chainOrder = switcherProviders(lang).map((p) => p.name);
+  const cached = providerOverride
+    ? cache.get(lang, word, providerOverride)
+    : cache.getInChain(lang, word, chainOrder);
   if (cached) {
+    if (myToken !== lookupToken) return;
     lastLookup.word = word;
     lastLookup.lang = lang;
     renderEntry(resultHost, cached.entry, cached.source, cached.word || word, lang);
@@ -380,6 +389,7 @@ async function doLookup(word, lang, providerOverride) {
   const body = { lang, word };
   if (providerOverride) body.provider = providerOverride;
   const res = await api.post("/api/dictionary/lookup", body);
+  if (myToken !== lookupToken) return; // a newer search started meanwhile
   if (!res.ok) {
     resultHost.innerHTML = `
       <div class="card" style="border-left: 4px solid var(--danger)">
