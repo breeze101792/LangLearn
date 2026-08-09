@@ -4,10 +4,12 @@ import { api } from "./api.js";
 import { store } from "./state.js";
 import { renderNavLinks } from "./components/nav-links.js";
 import { renderLangSwitcher } from "./components/lang-switcher.js";
+import { bindContextMenu } from "./components/context-menu.js";
 
 async function boot() {
   applyStoredTheme();
   bindThemeCycle();
+  bindContextMenu();
   await loadInitial();
   renderNavLinks(currentHash());
   renderLangSwitcher();
