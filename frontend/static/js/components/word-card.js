@@ -80,7 +80,14 @@ export function findCachedEntry(lang, word) {
     const k = `langlearn:dict:v1:${lang}:${word.toLowerCase()}`;
     const hit = all[k];
     if (!hit) return null;
-    return hit.entry || null;
+    const bySource = hit.bySource || {};
+    const sources = Object.keys(bySource);
+    if (sources.length === 0) return null;
+    let best = bySource[sources[0]];
+    for (const s of sources) {
+      if ((bySource[s].fetchedAt || 0) > (best.fetchedAt || 0)) best = bySource[s];
+    }
+    return best.entry || null;
   } catch (e) {
     return null;
   }

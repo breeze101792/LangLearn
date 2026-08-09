@@ -1,5 +1,6 @@
-// LLM dictionary cache in localStorage. LRU by language, max 1000 entries per lang.
-// Each entry: { key: "<lang>:<word>", lang, word, entry, source, fetchedAt }.
+// Dictionary result cache in localStorage. LRU by language, max 1000 words per lang.
+// Each entry: map of provider -> { lang, word, entry, source, fetchedAt } so a
+// word's WordNet and LLM results don't overwrite each other.
 // Loaded lazily; first time we use localStorage we might be disabled (private mode).
 //
 // Key namespace: langlearn:dict:v1:<lang>:<word>.
@@ -37,12 +38,28 @@ function writeAll(obj) {
 }
 
 export const cache = {
-  get(lang, word) {
+  /**
+   * Return the cached entry for `lang`+`word`. When `source` is given, only an
+   * entry from exactly that provider counts; otherwise return the most recent
+   * entry.
+   */
+  get(lang, word, source) {
     const k = keyFor(lang, word);
     const all = readAll();
-    return all[k] || null;
+    const hit = all[k];
+    if (!hit) return null;
+    const bySource = hit.bySource || {};
+    if (source) return bySource[source] || null;
+    // No provider requested: return the most recently stored result.
+    const sources = Object.keys(bySource);
+    if (sources.length === 0) return null;
+    let best = bySource[sources[0]];
+    for (const s of sources) {
+      if ((bySource[s].fetchedAt || 0) > (best.fetchedAt || 0)) best = bySource[s];
+    }
+    return best;
   },
-  set(lang, word, payload) {
+  set(lang, word, source, payload) {
     const k = keyFor(lang, word);
     const all = readAll();
     // enforce per-lang cap
@@ -51,7 +68,10 @@ export const cache = {
     if (sameLang.length >= MAX_PER_LANG) {
       sameLang.slice(0, sameLang.length - MAX_PER_LANG + 1).forEach((x) => delete all[x]);
     }
-    all[k] = { ...payload, fetchedAt: Date.now() };
+    const prev = all[k] || { bySource: {} };
+    prev.bySource = prev.bySource || {};
+    prev.bySource[source] = { ...payload, source, fetchedAt: Date.now() };
+    all[k] = prev;
     writeAll(all);
   },
   clearLang(lang) {

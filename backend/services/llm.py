@@ -195,10 +195,13 @@ class OpenAICompatClient(_BaseClient):
     def chat(self, *, system, user, schema, schema_name, temperature) -> str:
         import os
         api_key = os.environ.get("OPENAI_API_KEY", "") or config.OPENAI_API_KEY
-        if not api_key:
-            raise LLMError("OPENAI_API_KEY is not set")
         url = (os.environ.get("OPENAI_BASE_URL") or config.OPENAI_BASE_URL).rstrip("/") + "/chat/completions"
         model = os.environ.get("OPENAI_MODEL") or config.OPENAI_MODEL
+        # Only OpenAI's hosted API hard-requires a key; self-hosted /
+        # OpenAI-compatible endpoints (e.g. Ollama) often don't.
+        requires_key = "api.openai.com" in url
+        if requires_key and not api_key:
+            raise LLMError("OPENAI_API_KEY is not set")
         payload = {
             "model": model,
             "messages": [
@@ -215,10 +218,9 @@ class OpenAICompatClient(_BaseClient):
                 },
             },
         }
-        headers = {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        }
+        headers = {"Content-Type": "application/json"}
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
         return _post_json(url, payload, headers)
 
     def supports_strict_schema(self) -> bool:

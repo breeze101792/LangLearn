@@ -66,7 +66,7 @@ with one retry on schema validation failure. Schema files live in
   filled in place.
 - **First-run initialization** is automatic when you open a language, and
   a manual button in Settings → Initialize data replaces the seed.
-- **Browser-local cache** for LLM lookups only (`langlearn:dict:v1:*` in
+- **Browser-local cache** for dictionary lookups (`langlearn:dict:v1:*` in
   localStorage, LRU-capped at 1000 entries per language).
 
 ## Project layout

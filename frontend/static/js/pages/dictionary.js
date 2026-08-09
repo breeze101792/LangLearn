@@ -361,17 +361,16 @@ async function doLookup(word, lang, providerOverride) {
     </div>
   `;
 
-  // 1) local cache hit. Only honor the cache when no provider is forced —
-  // a forced lookup means the user explicitly wants a specific source.
-  if (!providerOverride) {
-    const cached = cache.get(lang, word);
-    if (cached) {
-      lastLookup.word = word;
-      lastLookup.lang = lang;
-      renderEntry(resultHost, cached.entry, cached.source, cached.word, lang);
-      maybeShowUndoToast(cached.word, lang);
-      return;
-    }
+  // 1) local cache hit. A forced lookup asks for a specific source, so only
+  // accept an entry produced by that provider; otherwise use whatever was
+  // cached for the word (most recent first).
+  const cached = cache.get(lang, word, providerOverride || null);
+  if (cached) {
+    lastLookup.word = word;
+    lastLookup.lang = lang;
+    renderEntry(resultHost, cached.entry, cached.source, cached.word || word, lang);
+    maybeShowUndoToast(cached.word || word, lang);
+    return;
   }
 
   lastLookup.word = word;
@@ -395,9 +394,7 @@ async function doLookup(word, lang, providerOverride) {
     return;
   }
   renderEntry(resultHost, data.entry, data.source, word, lang);
-  if (data.source === "llm" && !providerOverride) {
-    cache.set(lang, word, { entry: data.entry, source: data.source, word });
-  }
+  cache.set(lang, word, data.source, { entry: data.entry, word });
   maybeShowUndoToast(word, lang, data.auto_added);
 }
 
