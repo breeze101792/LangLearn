@@ -24,7 +24,7 @@ def _stub_llm_payload():
 
 def _stub_phrase_payload():
     return {
-        "literal_translation": "good night",
+        "example_sentence": "good night",
         "explanation_primary": "Farewell used in the evening.",
         "explanation_secondary": "晚安。",
     }
@@ -61,10 +61,10 @@ def test_structures_list_returns_only_user_language():
     client = app.test_client()
     client.post("/api/structures",
                 json={"language": "en", "pattern": "S V O",
-                      "explanation_primary": "Basic", "source": "user"})
+                      "explanation_primary": "Basic", "source": "user", "example_sentence": "...", "explanation": "..."})
     client.post("/api/structures",
                 json={"language": "es", "pattern": "S V O",
-                      "explanation_primary": "Basico", "source": "user"})
+                      "explanation_primary": "Basico", "source": "user", "example_sentence": "...", "explanation": "..."})
     en = client.get("/api/structures?lang=en").get_json()["data"]["items"]
     es = client.get("/api/structures?lang=es").get_json()["data"]["items"]
     assert all(i["language"] == "en" for i in en)
@@ -82,7 +82,7 @@ def test_structures_add_invalid_language_400():
     client = app.test_client()
     r = client.post("/api/structures",
                     json={"language": "ENG", "pattern": "S V O",
-                          "explanation_primary": "Basic"})
+                          "explanation_primary": "Basic", "example_sentence": "...", "explanation": "..."})
     assert r.status_code == 400
 
 
@@ -93,7 +93,7 @@ def test_structures_add_missing_pattern_400():
     app = create_app()
     client = app.test_client()
     r = client.post("/api/structures",
-                    json={"language": "en", "explanation_primary": "Basic"})
+                    json={"language": "en", "explanation_primary": "Basic", "example_sentence": "...", "explanation": "..."})
     assert r.status_code == 400
 
 
@@ -105,7 +105,7 @@ def test_structures_add_blank_pattern_400():
     client = app.test_client()
     r = client.post("/api/structures",
                     json={"language": "en", "pattern": "   ",
-                          "explanation_primary": "Basic"})
+                          "explanation_primary": "Basic", "example_sentence": "...", "explanation": "..."})
     assert r.status_code == 400
 
 
@@ -117,7 +117,7 @@ def test_structures_add_pattern_too_long_400():
     client = app.test_client()
     r = client.post("/api/structures",
                     json={"language": "en", "pattern": "X" * 501,
-                          "explanation_primary": "Basic"})
+                          "explanation_primary": "Basic", "example_sentence": "...", "explanation": "..."})
     assert r.status_code == 400
 
 
@@ -129,7 +129,7 @@ def test_structures_add_non_string_pattern_400():
     client = app.test_client()
     r = client.post("/api/structures",
                     json={"language": "en", "pattern": 123,
-                          "explanation_primary": "Basic"})
+                          "explanation_primary": "Basic", "example_sentence": "...", "explanation": "..."})
     assert r.status_code == 400
 
 
@@ -141,7 +141,7 @@ def test_structures_add_default_source_is_user():
     client = app.test_client()
     r = client.post("/api/structures",
                     json={"language": "en", "pattern": "S V O",
-                          "explanation_primary": "Basic"})
+                          "explanation_primary": "Basic", "example_sentence": "...", "explanation": "..."})
     assert r.status_code == 200
     assert r.get_json()["data"]["source"] == "user"
 
@@ -155,7 +155,7 @@ def test_structures_add_unknown_source_coerced_to_user():
     r = client.post("/api/structures",
                     json={"language": "en", "pattern": "S V O",
                           "explanation_primary": "Basic",
-                          "source": "made_up"})
+                          "source": "made_up", "example_sentence": "...", "explanation": "..."})
     assert r.status_code == 200
     assert r.get_json()["data"]["source"] == "user"
 
@@ -168,7 +168,7 @@ def test_structures_add_llm_source_accepted():
     client = app.test_client()
     r = client.post("/api/structures",
                     json={"language": "en", "pattern": "S V O",
-                          "explanation_primary": "Basic", "source": "llm"})
+                          "explanation_primary": "Basic", "source": "llm", "example_sentence": "...", "explanation": "..."})
     assert r.status_code == 200
     assert r.get_json()["data"]["source"] == "llm"
 
@@ -194,7 +194,7 @@ def test_structures_update_non_dict_body_400():
     client = app.test_client()
     r = client.post("/api/structures",
                     json={"language": "en", "pattern": "S V O",
-                          "explanation_primary": "Basic", "source": "user"})
+                          "explanation_primary": "Basic", "source": "user", "example_sentence": "...", "explanation": "..."})
     sid = r.get_json()["data"]["id"]
     r = client.put(f"/api/structures/{sid}", json=["not", "a", "dict"])
     assert r.status_code == 400
@@ -209,7 +209,7 @@ def test_structures_update_clears_explanation_with_null():
     r = client.post("/api/structures",
                     json={"language": "en", "pattern": "S V O",
                           "explanation_primary": "Basic",
-                          "explanation_secondary": "second", "source": "user"})
+                          "explanation_secondary": "second", "source": "user", "example_sentence": "...", "explanation": "..."})
     sid = r.get_json()["data"]["id"]
     r = client.put(f"/api/structures/{sid}",
                    json={"explanation_secondary": None})
@@ -227,7 +227,7 @@ def test_structures_update_no_fields_is_noop():
     client = app.test_client()
     r = client.post("/api/structures",
                     json={"language": "en", "pattern": "S V O",
-                          "explanation_primary": "Basic", "source": "user"})
+                          "explanation_primary": "Basic", "source": "user", "example_sentence": "...", "explanation": "..."})
     sid = r.get_json()["data"]["id"]
     r = client.put(f"/api/structures/{sid}", json={})
     assert r.status_code == 200
@@ -241,9 +241,9 @@ def test_structures_update_rejects_empty_pattern():
     client = app.test_client()
     r = client.post("/api/structures",
                     json={"language": "en", "pattern": "S V O",
-                          "explanation_primary": "Basic", "source": "user"})
+                          "explanation_primary": "Basic", "source": "user", "example_sentence": "...", "explanation": "..."})
     sid = r.get_json()["data"]["id"]
-    r = client.put(f"/api/structures/{sid}", json={"pattern": "   "})
+    r = client.put(f"/api/structures/{sid}", json={"pattern": "   ", "example_sentence": "...", "explanation": "..."})
     assert r.status_code == 400
 
 
@@ -255,9 +255,9 @@ def test_structures_update_pattern_too_long_400():
     client = app.test_client()
     r = client.post("/api/structures",
                     json={"language": "en", "pattern": "S V O",
-                          "explanation_primary": "Basic", "source": "user"})
+                          "explanation_primary": "Basic", "source": "user", "example_sentence": "...", "explanation": "..."})
     sid = r.get_json()["data"]["id"]
-    r = client.put(f"/api/structures/{sid}", json={"pattern": "X" * 501})
+    r = client.put(f"/api/structures/{sid}", json={"pattern": "X" * 501, "example_sentence": "...", "explanation": "..."})
     assert r.status_code == 400
 
 
@@ -282,7 +282,7 @@ def test_structures_delete_then_404():
     client = app.test_client()
     r = client.post("/api/structures",
                     json={"language": "en", "pattern": "S V O",
-                          "explanation_primary": "Basic", "source": "user"})
+                          "explanation_primary": "Basic", "source": "user", "example_sentence": "...", "explanation": "..."})
     sid = r.get_json()["data"]["id"]
     client.delete(f"/api/structures/{sid}")
     r2 = client.delete(f"/api/structures/{sid}")
@@ -299,11 +299,11 @@ def test_structures_fill_returns_llm_payload(monkeypatch):
     init_schema()
 
     monkeypatch.setattr(llm_svc, "fill_structure_via_llm",
-                        lambda *, lang, partial: _stub_llm_payload())
+                        lambda *, lang, partial, **_: _stub_llm_payload())
     app = create_app()
     client = app.test_client()
     r = client.post("/api/structures/fill",
-                    json={"language": "en", "pattern": "S V O"})
+                    json={"language": "en", "pattern": "S V O", "example_sentence": "...", "explanation": "..."})
     assert r.status_code == 200
     data = r.get_json()["data"]
     assert data["pattern"] == "S V O"
@@ -317,7 +317,7 @@ def test_structures_fill_invalid_language_400():
     app = create_app()
     client = app.test_client()
     r = client.post("/api/structures/fill",
-                    json={"language": "ENG", "pattern": "S V O"})
+                    json={"language": "ENG", "pattern": "S V O", "example_sentence": "...", "explanation": "..."})
     assert r.status_code == 400
 
 
@@ -327,13 +327,13 @@ def test_structures_fill_llm_error_returns_502(monkeypatch):
     from backend.services import llm as llm_svc
     init_schema()
 
-    def boom(*, lang, partial):
+    def boom(*, lang, partial, **_):
         raise llm_svc.LLMError("provider unavailable")
     monkeypatch.setattr(llm_svc, "fill_structure_via_llm", boom)
     app = create_app()
     client = app.test_client()
     r = client.post("/api/structures/fill",
-                    json={"language": "en", "pattern": "S V O"})
+                    json={"language": "en", "pattern": "S V O", "example_sentence": "...", "explanation": "..."})
     assert r.status_code == 502
 
 
@@ -343,13 +343,13 @@ def test_structures_fill_llm_schema_error_returns_502(monkeypatch):
     from backend.services import llm as llm_svc
     init_schema()
 
-    def boom(*, lang, partial):
+    def boom(*, lang, partial, **_):
         raise llm_svc.LLMSchemaError("bad shape")
     monkeypatch.setattr(llm_svc, "fill_structure_via_llm", boom)
     app = create_app()
     client = app.test_client()
     r = client.post("/api/structures/fill",
-                    json={"language": "en", "pattern": "S V O"})
+                    json={"language": "en", "pattern": "S V O", "example_sentence": "...", "explanation": "..."})
     assert r.status_code == 502
 
 
@@ -384,10 +384,10 @@ def test_phrases_list_isolates_by_language():
     client = app.test_client()
     client.post("/api/phrases",
                 json={"language": "en", "phrase": "Hi",
-                      "explanation_primary": "Hello"})
+                      "explanation_primary": "Hello", "explanation": "...", "example_sentence": "..."})
     client.post("/api/phrases",
                 json={"language": "es", "phrase": "Hola",
-                      "explanation_primary": "Hello"})
+                      "explanation_primary": "Hello", "explanation": "...", "example_sentence": "..."})
     en = client.get("/api/phrases?lang=en").get_json()["data"]["items"]
     es = client.get("/api/phrases?lang=es").get_json()["data"]["items"]
     assert all(i["language"] == "en" for i in en)
@@ -404,7 +404,7 @@ def test_phrases_add_missing_phrase_400():
     app = create_app()
     client = app.test_client()
     r = client.post("/api/phrases",
-                    json={"language": "en", "explanation_primary": "Hello"})
+                    json={"language": "en", "explanation_primary": "Hello", "explanation": "...", "example_sentence": "..."})
     assert r.status_code == 400
 
 
@@ -416,7 +416,7 @@ def test_phrases_add_blank_phrase_400():
     client = app.test_client()
     r = client.post("/api/phrases",
                     json={"language": "en", "phrase": "   ",
-                          "explanation_primary": "Hello"})
+                          "explanation_primary": "Hello", "explanation": "...", "example_sentence": "..."})
     assert r.status_code == 400
 
 
@@ -428,7 +428,7 @@ def test_phrases_add_phrase_too_long_400():
     client = app.test_client()
     r = client.post("/api/phrases",
                     json={"language": "en", "phrase": "X" * 501,
-                          "explanation_primary": "Hello"})
+                          "explanation_primary": "Hello", "explanation": "...", "example_sentence": "..."})
     assert r.status_code == 400
 
 
@@ -440,7 +440,7 @@ def test_phrases_add_default_source_is_user():
     client = app.test_client()
     r = client.post("/api/phrases",
                     json={"language": "en", "phrase": "Hi",
-                          "explanation_primary": "Hello"})
+                          "explanation_primary": "Hello", "explanation": "...", "example_sentence": "..."})
     assert r.status_code == 200
     assert r.get_json()["data"]["source"] == "user"
 
@@ -454,7 +454,7 @@ def test_phrases_add_unknown_source_coerced_to_user():
     r = client.post("/api/phrases",
                     json={"language": "en", "phrase": "Hi",
                           "explanation_primary": "Hello",
-                          "source": "made_up"})
+                          "source": "made_up", "explanation": "...", "example_sentence": "..."})
     assert r.status_code == 200
     assert r.get_json()["data"]["source"] == "user"
 
@@ -467,7 +467,7 @@ def test_phrases_add_invalid_language_400():
     client = app.test_client()
     r = client.post("/api/phrases",
                     json={"language": "ENG", "phrase": "Hi",
-                          "explanation_primary": "Hello"})
+                          "explanation_primary": "Hello", "explanation": "...", "example_sentence": "..."})
     assert r.status_code == 400
 
 
@@ -484,7 +484,9 @@ def test_phrases_update_not_found_404():
     assert r.status_code == 404
 
 
-def test_phrases_update_clears_lit_translation_with_null():
+def test_phrases_update_clears_example_sentence_with_null():
+    """PUT with example_sentence=null on a NOT NULL column stores an
+    empty string (not null) so the constraint holds."""
     from backend.app import create_app
     from backend.db import init_schema
     init_schema()
@@ -492,14 +494,14 @@ def test_phrases_update_clears_lit_translation_with_null():
     client = app.test_client()
     r = client.post("/api/phrases",
                     json={"language": "en", "phrase": "Hi",
-                          "literal_translation": "hello",
-                          "explanation_primary": "Hello"})
+                          "example_sentence": "hello",
+                          "explanation_primary": "Hello", "explanation": "..."})
     pid = r.get_json()["data"]["id"]
-    r = client.put(f"/api/phrases/{pid}", json={"literal_translation": None})
+    r = client.put(f"/api/phrases/{pid}", json={"example_sentence": None, "explanation": "...", "phrase": "..."})
     assert r.status_code == 200
     items = client.get("/api/phrases?lang=en").get_json()["data"]["items"]
     target = next(i for i in items if i["id"] == pid)
-    assert target["literal_translation"] is None
+    assert target["example_sentence"] == ""
 
 
 def test_phrases_update_rejects_empty_phrase():
@@ -510,9 +512,9 @@ def test_phrases_update_rejects_empty_phrase():
     client = app.test_client()
     r = client.post("/api/phrases",
                     json={"language": "en", "phrase": "Hi",
-                          "explanation_primary": "Hello"})
+                          "explanation_primary": "Hello", "explanation": "...", "example_sentence": "..."})
     pid = r.get_json()["data"]["id"]
-    r = client.put(f"/api/phrases/{pid}", json={"phrase": "   "})
+    r = client.put(f"/api/phrases/{pid}", json={"phrase": "   ", "explanation": "...", "example_sentence": "..."})
     assert r.status_code == 400
 
 
@@ -524,9 +526,9 @@ def test_phrases_update_phrase_too_long_400():
     client = app.test_client()
     r = client.post("/api/phrases",
                     json={"language": "en", "phrase": "Hi",
-                          "explanation_primary": "Hello"})
+                          "explanation_primary": "Hello", "explanation": "...", "example_sentence": "..."})
     pid = r.get_json()["data"]["id"]
-    r = client.put(f"/api/phrases/{pid}", json={"phrase": "X" * 501})
+    r = client.put(f"/api/phrases/{pid}", json={"phrase": "X" * 501, "explanation": "...", "example_sentence": "..."})
     assert r.status_code == 400
 
 
@@ -568,14 +570,14 @@ def test_phrases_fill_returns_llm_payload(monkeypatch):
     init_schema()
 
     monkeypatch.setattr(llm_svc, "fill_phrase_via_llm",
-                        lambda *, lang, partial: _stub_phrase_payload())
+                        lambda *, lang, partial, **_: _stub_phrase_payload())
     app = create_app()
     client = app.test_client()
     r = client.post("/api/phrases/fill",
-                    json={"language": "en"})
+                    json={"language": "en", "explanation": "...", "example_sentence": "...", "phrase": "..."})
     assert r.status_code == 200
     data = r.get_json()["data"]
-    assert data["literal_translation"] == "good night"
+    assert data["example_sentence"] == "good night"
 
 
 def test_phrases_fill_invalid_language_400():
@@ -584,7 +586,7 @@ def test_phrases_fill_invalid_language_400():
     init_schema()
     app = create_app()
     client = app.test_client()
-    r = client.post("/api/phrases/fill", json={"language": "ENG"})
+    r = client.post("/api/phrases/fill", json={"language": "ENG", "explanation": "...", "example_sentence": "...", "phrase": "..."})
     assert r.status_code == 400
 
 
@@ -594,12 +596,12 @@ def test_phrases_fill_llm_error_returns_502(monkeypatch):
     from backend.services import llm as llm_svc
     init_schema()
 
-    def boom(*, lang, partial):
+    def boom(*, lang, partial, **_):
         raise llm_svc.LLMError("provider unavailable")
     monkeypatch.setattr(llm_svc, "fill_phrase_via_llm", boom)
     app = create_app()
     client = app.test_client()
-    r = client.post("/api/phrases/fill", json={"language": "en"})
+    r = client.post("/api/phrases/fill", json={"language": "en", "explanation": "...", "example_sentence": "...", "phrase": "..."})
     assert r.status_code == 502
 
 

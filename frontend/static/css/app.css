@@ -131,6 +131,7 @@ code, pre, kbd, samp { font-family: var(--font-mono); }
 .input--error { border-color: var(--danger); }
 .field { display: flex; flex-direction: column; gap: var(--sp-1); margin-bottom: var(--sp-4); }
 .field__label { font-size: 13px; font-weight: 500; color: var(--text-secondary); }
+.field__required { color: var(--danger); margin-left: 2px; }
 .field__hint { font-size: 13px; color: var(--text-muted); }
 .field__error { font-size: 13px; color: var(--danger); }
 
@@ -347,6 +348,11 @@ code, pre, kbd, samp { font-family: var(--font-mono); }
 .list-item--familiar { opacity: 0.72; }
 .list-item__main { color: var(--text-primary); }
 .list-item__meta { color: var(--text-secondary); font-size: 14px; }
+.list-item__meta-label { color: var(--text-muted); font-weight: 500; margin-right: 4px; }
+.list-item__meta-note { color: var(--text-muted); font-size: 12px; font-style: italic; margin-left: 4px; }
+.list-item__meta--target { color: var(--text-primary); }
+.list-item__meta--native { color: var(--text-secondary); border-left: 2px solid var(--accent-soft); padding-left: 8px; }
+.list-item__meta--missing { color: var(--text-muted); font-style: italic; }
 .list-item__actions { display: flex; gap: var(--sp-2); }
 .list-item__badges { display: flex; gap: var(--sp-1); flex-wrap: wrap; align-items: center; position: relative; }
 

@@ -5,6 +5,23 @@ import { store } from "../state.js";
 import { toast } from "../components/toast.js";
 
 export function renderPhrases(host) {
+  const state = store.get();
+  const lang = (state.settings && state.settings.active_language) || "en";
+  const primary = (state.settings && state.settings.explanation_primary) || null;
+  const secondary = (state.settings && state.settings.explanation_secondary) || null;
+
+  const fields = [
+    { key: "phrase",               label: "Phrase (in target language)", max: 500, required: true },
+    { key: "example_sentence",     label: "Example sentence (in target language, showing the phrase in use)", max: 1000, required: true },
+    { key: "explanation",          label: "Explanation (in target language, paragraph)", max: 1500, required: true },
+  ];
+  if (!primary || primary !== lang) {
+    fields.push({ key: "explanation_primary", label: `Explanation (in ${labelFor(primary, "primary native")})`, max: 1000 });
+  }
+  if (secondary && secondary !== primary && secondary !== lang) {
+    fields.push({ key: "explanation_secondary", label: `Explanation (in ${labelFor(secondary, "secondary native")})`, max: 1000 });
+  }
+
   renderListPage({
     host,
     title: "Phrases",
@@ -14,21 +31,22 @@ export function renderPhrases(host) {
     emptyMsg: "No phrases for this language yet.",
     emptyActions: true,
     rowRenderer: renderPhraseRow,
-    fields: [
-      { key: "phrase",               label: "Phrase (in target language)", max: 500 },
-      { key: "literal_translation",  label: "Literal translation (optional)", max: 500 },
-      { key: "explanation_primary",  label: "Explanation (primary native)", max: 1000 },
-      { key: "explanation_secondary", label: "Explanation (secondary native, optional)", max: 1000 },
-    ],
+    fields,
     addBody: (lang, form) => ({
       language: lang,
       phrase: form.phrase,
-      literal_translation: form.literal_translation,
+      example_sentence: form.example_sentence,
+      explanation: form.explanation,
       explanation_primary: form.explanation_primary,
       explanation_secondary: form.explanation_secondary,
       source: "user",
     }),
   });
+}
+
+function labelFor(code, fallback) {
+  const map = { en: "English", es: "Spanish", ja: "Japanese", pt: "Portuguese", zh: "Traditional Chinese", fr: "French", de: "German" };
+  return map[code] || fallback;
 }
 
 function renderPhraseRow(item) {
@@ -54,15 +72,45 @@ function renderPhraseRow(item) {
     <article class="list-item ${isBuiltIn ? "list-item--builtin" : ""} ${isFamiliar ? "list-item--familiar" : ""}" data-id="${item.id}">
       <div class="list-item__badges">${badge}${familiarBadge}</div>
       <div class="list-item__main"><strong>"${escapeHtml(item.phrase || "")}"</strong></div>
-      ${item.literal_translation ? `<div class="list-item__meta">Literal: ${escapeHtml(item.literal_translation)}</div>` : ""}
-      ${item.explanation_primary ? `<div class="list-item__meta">${escapeHtml(item.explanation_primary)}</div>` : ""}
-      ${item.explanation_secondary ? `<div class="list-item__meta">${escapeHtml(item.explanation_secondary)}</div>` : ""}
+      ${exampleSentenceLine(item)}
+      ${item.explanation
+        ? `<div class="list-item__meta list-item__meta--target" title="In the target language">
+             <span class="list-item__meta-label">Explanation:</span>
+             ${escapeHtml(item.explanation)}
+           </div>`
+        : ""}
+      ${item.explanation_primary
+        ? `<div class="list-item__meta list-item__meta--native" title="In your primary native language"><span class="list-item__meta-label">${escapeHtml(labelForTarget(item.language))}:</span> ${escapeHtml(item.explanation_primary)}</div>`
+        : ""}
+      ${item.explanation_secondary
+        ? `<div class="list-item__meta list-item__meta--native" title="In your secondary native language"><span class="list-item__meta-label">${escapeHtml(labelForTarget(item.language, true))}:</span> ${escapeHtml(item.explanation_secondary)}</div>`
+        : ""}
       <div class="list-item__actions">
         ${rememberBtn}
         ${isBuiltIn ? "" : `<button class="btn btn--ghost btn--sm" data-action="edit">Edit</button><button class="btn btn--ghost btn--sm" data-action="delete">Delete</button>`}
       </div>
     </article>
   `;
+}
+
+function exampleSentenceLine(item) {
+  const sentence = item.example_sentence;
+  if (!sentence) {
+    return `<div class="list-item__meta list-item__meta--missing" title="In the target language">Example: <em>(missing)</em></div>`;
+  }
+  return `<div class="list-item__meta list-item__meta--target" title="In the target language"><span class="list-item__meta-label">Example:</span> <code>${escapeHtml(sentence)}</code></div>`;
+}
+
+function labelForTarget(lang, secondary = false) {
+  const state = store.get();
+  const code = secondary
+    ? (state.settings && state.settings.explanation_secondary) || null
+    : (state.settings && state.settings.explanation_primary) || null;
+  const map = { en: "English", es: "Spanish", ja: "Japanese",
+                pt: "Portuguese", zh: "Traditional Chinese",
+                fr: "French", de: "German" };
+  if (code && map[code]) return map[code];
+  return secondary ? "Native 2" : "Native 1";
 }
 
 function escapeHtml(s) {
@@ -202,8 +250,8 @@ function renderAddForm(panel, lang, fields, fillEndpoint, addBody, endpoint, onS
   const inputs = {};
   const formHtml = fields.map((f) => `
     <div class="field">
-      <label class="field__label" for="field-${f.key}">${escapeHtml(f.label)}</label>
-      <textarea id="field-${f.key}" class="input" maxlength="${f.max}" rows="2"></textarea>
+      <label class="field__label" for="field-${f.key}">${escapeHtml(f.label)}${f.required ? ' <span class="field__required" aria-label="required">*</span>' : ""}</label>
+      <textarea id="field-${f.key}" class="input" maxlength="${f.max}" rows="2"${f.required ? ' required aria-required="true"' : ""}></textarea>
     </div>
   `).join("");
   panel.innerHTML = `
@@ -225,6 +273,10 @@ function renderAddForm(panel, lang, fields, fillEndpoint, addBody, endpoint, onS
   panel.querySelector("#ai-fill").addEventListener("click", async () => {
     const partial = {};
     fields.forEach((f) => { partial[f.key] = inputs[f.key].value.trim() || null; });
+    if (Object.values(partial).every((v) => v == null)) {
+      toast({ title: "Nothing to fill", message: "Add at least one detail before asking the AI to fill the rest.", variant: "error" });
+      return;
+    }
     const btn = panel.querySelector("#ai-fill");
     btn.disabled = true;
     btn.textContent = "Filling…";
@@ -247,6 +299,13 @@ function renderAddForm(panel, lang, fields, fillEndpoint, addBody, endpoint, onS
   panel.querySelector("#save-add").addEventListener("click", async () => {
     const form = {};
     fields.forEach((f) => { form[f.key] = inputs[f.key].value.trim() || null; });
+    for (const f of fields) {
+      if (f.required && !form[f.key]) {
+        toast({ title: `${f.key} is required`, message: `Enter a ${f.key.replace(/_/g, " ")} before saving.`, variant: "error" });
+        inputs[f.key].focus();
+        return;
+      }
+    }
     const res = await api.post(endpoint, addBody(lang, form));
     if (!res.ok) {
       toast({ title: "Couldn't save", message: res.error, variant: "error" });

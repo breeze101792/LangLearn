@@ -85,12 +85,13 @@ def seed_builtin(lang: str, user_id: int = config.DEFAULT_USER_ID) -> dict:
             conn.execute(
                 "INSERT INTO structures ("
                 "  user_id, language, pattern, example_sentence,"
-                "  explanation_primary, explanation_secondary, source"
-                ") VALUES (?, ?, ?, ?, ?, ?, 'built-in')",
+                "  explanation, explanation_primary, explanation_secondary, source"
+                ") VALUES (?, ?, ?, ?, ?, ?, ?, 'built-in')",
                 (
                     user_id, lang,
                     s.get("pattern", ""),
                     s.get("example_sentence"),
+                    s.get("explanation") or "",
                     s.get("explanation_primary"),
                     s.get("explanation_secondary"),
                 ),
@@ -98,13 +99,14 @@ def seed_builtin(lang: str, user_id: int = config.DEFAULT_USER_ID) -> dict:
         for p in phrases:
             conn.execute(
                 "INSERT INTO phrases ("
-                "  user_id, language, phrase, literal_translation,"
-                "  explanation_primary, explanation_secondary, source"
-                ") VALUES (?, ?, ?, ?, ?, ?, 'built-in')",
+                "  user_id, language, phrase, example_sentence,"
+                "  explanation, explanation_primary, explanation_secondary, source"
+                ") VALUES (?, ?, ?, ?, ?, ?, ?, 'built-in')",
                 (
                     user_id, lang,
                     p.get("phrase", ""),
-                    p.get("literal_translation"),
+                    p.get("example_sentence"),
+                    p.get("explanation") or "",
                     p.get("explanation_primary"),
                     p.get("explanation_secondary"),
                 ),
@@ -120,12 +122,24 @@ def seed_via_llm(lang: str, user_id: int = config.DEFAULT_USER_ID,
                  n_structures: int = STRUCTURES_PER_LANG,
                  n_phrases: int = PHRASES_PER_LANG) -> dict:
     """Seed by calling the LLM service. Caller wraps in a seed_jobs row."""
-    from .llm import LLMError, generate_seed_payload
+    from . import settings as settings_svc
+    from .llm import LLMError, apply_explanation_rules, generate_seed_payload
 
+    user_settings = settings_svc.get_settings(user_id)
+    primary = user_settings.get("explanation_primary")
+    secondary = user_settings.get("explanation_secondary")
     try:
-        payload = generate_seed_payload(lang, n_structures, n_phrases)
-    except LLMError as e:
+        payload = generate_seed_payload(
+            lang, n_structures, n_phrases,
+            primary=primary, secondary=secondary,
+        )
+    except LLMError:
         raise
+    # Enforce the explanation-language rules at the persistence boundary
+    # so the rules hold even if the LLM service is mocked.
+    apply_explanation_rules(
+        payload, lang=lang, primary=primary, secondary=secondary,
+    )
 
     structures = payload.get("structures", [])
     phrases = payload.get("phrases", [])
@@ -135,12 +149,13 @@ def seed_via_llm(lang: str, user_id: int = config.DEFAULT_USER_ID,
             conn.execute(
                 "INSERT INTO structures ("
                 "  user_id, language, pattern, example_sentence,"
-                "  explanation_primary, explanation_secondary, source"
-                ") VALUES (?, ?, ?, ?, ?, ?, 'llm')",
+                "  explanation, explanation_primary, explanation_secondary, source"
+                ") VALUES (?, ?, ?, ?, ?, ?, ?, 'llm')",
                 (
                     user_id, lang,
                     s.get("pattern", ""),
                     s.get("example_sentence"),
+                    s.get("explanation") or "",
                     s.get("explanation_primary"),
                     s.get("explanation_secondary"),
                 ),
@@ -148,13 +163,14 @@ def seed_via_llm(lang: str, user_id: int = config.DEFAULT_USER_ID,
         for p in phrases:
             conn.execute(
                 "INSERT INTO phrases ("
-                "  user_id, language, phrase, literal_translation,"
-                "  explanation_primary, explanation_secondary, source"
-                ") VALUES (?, ?, ?, ?, ?, ?, 'llm')",
+                "  user_id, language, phrase, example_sentence,"
+                "  explanation, explanation_primary, explanation_secondary, source"
+                ") VALUES (?, ?, ?, ?, ?, ?, ?, 'llm')",
                 (
                     user_id, lang,
                     p.get("phrase", ""),
-                    p.get("literal_translation"),
+                    p.get("example_sentence"),
+                    p.get("explanation") or "",
                     p.get("explanation_primary"),
                     p.get("explanation_secondary"),
                 ),
@@ -175,6 +191,89 @@ def _replace_built_in(conn: sqlite3.Connection, user_id: int, lang: str) -> None
         "DELETE FROM phrases WHERE user_id=? AND language=? AND source IN ('built-in','llm')",
         (user_id, lang),
     )
+
+
+def apply_explanations(lang: str, user_id: int = config.DEFAULT_USER_ID) -> dict:
+    """Translate the user's existing target-language structures and
+    phrases into the user's current ``explanation_primary`` and
+    ``explanation_secondary`` natives, per the
+    [explanation-language rules].
+
+    Does not touch the row's target-language content (pattern /
+    example_sentence / phrase / literal_translation). Only the
+    explanation columns are overwritten. Safe to call multiple times;
+    the latest settings always win.
+
+    Returns a counts dict ``{"structures": int, "phrases": int}``
+    indicating how many rows were updated.
+
+    Raises ``LLMError`` on provider / schema failure.
+    """
+    from . import settings as settings_svc
+    from . import llm as llm_svc
+
+    user_settings = settings_svc.get_settings(user_id)
+    primary = user_settings.get("explanation_primary")
+    secondary = user_settings.get("explanation_secondary")
+
+    with get_conn() as conn:
+        struct_rows = conn.execute(
+            "SELECT id, pattern, example_sentence, explanation FROM structures"
+            " WHERE user_id=? AND language=?",
+            (user_id, lang),
+        ).fetchall()
+        phrase_rows = conn.execute(
+            "SELECT id, phrase, example_sentence, explanation FROM phrases"
+            " WHERE user_id=? AND language=?",
+            (user_id, lang),
+        ).fetchall()
+
+    structures = [dict(r) for r in struct_rows]
+    phrases = [dict(r) for r in phrase_rows]
+    if not structures and not phrases:
+        return {"structures": 0, "phrases": 0}
+
+    payload = llm_svc.apply_explanations_via_llm(
+        lang=lang, structures=structures, phrases=phrases,
+        primary=primary, secondary=secondary,
+    )
+
+    updated_s = 0
+    updated_p = 0
+    with transaction() as conn:
+        for item in (payload.get("structures") or []):
+            if not isinstance(item, dict):
+                continue
+            row_id = item.get("id")
+            if not isinstance(row_id, int):
+                continue
+            conn.execute(
+                "UPDATE structures SET"
+                "  explanation=?, explanation_primary=?, explanation_secondary=?"
+                " WHERE id=? AND user_id=? AND language=?",
+                (item.get("explanation"),
+                 item.get("explanation_primary"),
+                 item.get("explanation_secondary"),
+                 row_id, user_id, lang),
+            )
+            updated_s += 1
+        for item in (payload.get("phrases") or []):
+            if not isinstance(item, dict):
+                continue
+            row_id = item.get("id")
+            if not isinstance(row_id, int):
+                continue
+            conn.execute(
+                "UPDATE phrases SET"
+                "  explanation=?, explanation_primary=?, explanation_secondary=?"
+                " WHERE id=? AND user_id=? AND language=?",
+                (item.get("explanation"),
+                 item.get("explanation_primary"),
+                 item.get("explanation_secondary"),
+                 row_id, user_id, lang),
+            )
+            updated_p += 1
+    return {"structures": updated_s, "phrases": updated_p}
 
 
 def initialize_language(lang: str, user_id: int = config.DEFAULT_USER_ID,

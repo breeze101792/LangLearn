@@ -49,6 +49,27 @@ For non-built-in: calls `services.seed.generate_via_llm` which calls the
 LLM with a strict JSON schema (50 structures + 100 phrases). If the LLM
 is unreachable or schema invalid, returns 502.
 
+The initialize path generates *target-language* content; it does not
+fill `explanation_*` columns. To translate existing rows into the
+user's primary/secondary natives, use the apply-explanations
+endpoint below.
+
+#### `POST /api/languages/<code>/apply-explanations`
+
+Per-language translation pass. Loads existing target-language
+structures and phrases, asks the LLM to fill in `explanation`,
+`explanation_primary`, and `explanation_secondary` per the user's
+current settings, and overwrites those columns. The target-language
+content (`pattern`, `example_sentence`, `phrase`,
+`literal_translation`) is never changed. Safe to call multiple
+times; the latest settings always win.
+
+The `explanation` column is target-language and is always filled (or
+refined) — the explanation-language rules only apply to
+`explanation_primary` / `explanation_secondary`. Returns
+`{structures: int, phrases: int}` indicating how many rows were
+updated. Returns 502 if the LLM is unreachable or schema invalid.
+
 #### `GET /api/languages/<code>/seed-status`
 
 Returns `{code, seeded}`.
@@ -128,17 +149,40 @@ Items where `next_due <= now()`, ordered by due asc.
 Mirror image of each other:
 
 - `GET /<resource>?lang=` — list
-- `POST /<resource>` — create (source defaults to `user`)
+- `POST /<resource>` — create (source defaults to `user`).
+  `pattern` + `example_sentence` (structures) or `phrase` +
+  `literal_translation` (phrases) are required, all in the target
+  language. The
+  [explanation-language rules](architecture.md#explanation-language-rules)
+  apply on the server: a user-typed `explanation_primary` whose
+  language equals the target is silently nulled; same for
+  `explanation_secondary` when no secondary is set.
 - `PUT /<resource>/<id>` — edit; 403 if `source='built-in'`
 - `DELETE /<resource>/<id>` — delete; 403 if `source='built-in'`
-- `POST /<resource>/fill` — LLM fill-in for empty fields
+- `POST /<resource>/fill` — LLM fill-in for empty fields. The
+  blueprint reads `explanation_primary` / `explanation_secondary` from
+  the user's settings and applies the
+  [explanation-language rules](architecture.md#explanation-language-rules)
+  before returning: if the target language equals the user's primary
+  native, `explanation_primary` is forced to `null`; if no secondary is
+  set, `explanation_secondary` is forced to `null`.
 
 Field shapes:
 
 ```
-structures: {language, pattern, example_sentence?, explanation_primary?, explanation_secondary?, source?}
-phrases:    {language, phrase, literal_translation?, explanation_primary?, explanation_secondary?, source?}
+structures: {language, pattern, example_sentence, explanation, explanation_primary?, explanation_secondary?, source?}
+phrases:    {language, phrase, example_sentence, explanation, explanation_primary?, explanation_secondary?, source?}
 ```
+
+`explanation_*` columns are nullable because the rules above can
+force them to null even when the LLM would otherwise have filled them
+in. The three target-language fields (`pattern` + `example_sentence` +
+`explanation` for structures; `phrase` + `example_sentence` +
+`explanation` for phrases) are required on POST. `explanation` is a
+paragraph-length usage note in the target language describing when
+and why to use the structure/phrase, register, common context, and
+alternatives. `example_sentence` is one natural sentence in the
+target language showing the row in use.
 
 ### Auth
 

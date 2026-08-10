@@ -6,6 +6,7 @@ from flask import Blueprint, jsonify, request
 
 from .. import config
 from ..services import llm as llm_svc
+from ..services import settings as settings_svc
 from ..db import get_conn, transaction
 from ..util import err, is_known_lang, is_nonempty_str, ok
 
@@ -17,8 +18,9 @@ READONLY_SOURCES = ("built-in",)
 
 def _list(lang: str, *, familiar: bool | None = None) -> list[dict]:
     sql = (
-        "SELECT id, language, pattern, example_sentence, explanation_primary,"
-        "       explanation_secondary, source, familiar, added_at "
+        "SELECT id, language, pattern, example_sentence, explanation,"
+        "       explanation_primary, explanation_secondary, source,"
+        "       familiar, added_at "
         "FROM structures WHERE user_id=? AND language=?"
     )
     params: list = [config.DEFAULT_USER_ID, lang]
@@ -81,7 +83,14 @@ def add_structure():
         pattern = _coerce_str(body.get("pattern"), max_len=500, allow_none=False)
         if not pattern:
             return jsonify(err("pattern required", code="invalid_input")), 400
-        example = _coerce_str(body.get("example_sentence"), max_len=1000)
+        example = _coerce_str(body.get("example_sentence"), max_len=1000,
+                              allow_none=False)
+        if not example:
+            return jsonify(err("example_sentence required", code="invalid_input")), 400
+        explanation = _coerce_str(body.get("explanation"), max_len=1500,
+                                  allow_none=False)
+        if not explanation:
+            return jsonify(err("explanation required", code="invalid_input")), 400
         explanation_primary = _coerce_str(body.get("explanation_primary"), max_len=1000)
         explanation_secondary = _coerce_str(body.get("explanation_secondary"), max_len=1000)
         source = body.get("source", "user")
@@ -89,13 +98,23 @@ def add_structure():
             source = "user"
     except ValueError as e:
         return jsonify(err(str(e), code="invalid_input")), 400
+    # Apply the same explanation-language rules the LLM path uses, so a
+    # user who types a redundant `explanation_primary` (same language as
+    # the target) doesn't end up with it in the DB.
+    user_settings = settings_svc.get_settings(config.DEFAULT_USER_ID)
+    primary = user_settings.get("explanation_primary")
+    secondary = user_settings.get("explanation_secondary")
+    if not llm_svc._should_generate_primary(lang, primary):
+        explanation_primary = None
+    if not llm_svc._should_generate_secondary(primary, secondary):
+        explanation_secondary = None
     with transaction() as conn:
         cur = conn.execute(
             "INSERT INTO structures (user_id, language, pattern, example_sentence,"
-            "  explanation_primary, explanation_secondary, source)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (config.DEFAULT_USER_ID, lang, pattern, example, explanation_primary,
-             explanation_secondary, source),
+            "  explanation, explanation_primary, explanation_secondary, source)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (config.DEFAULT_USER_ID, lang, pattern, example, explanation,
+             explanation_primary, explanation_secondary, source),
         )
         new_id = cur.lastrowid
     return ok({"id": new_id, "source": source})
@@ -117,19 +136,24 @@ def update_structure(item_id: int):
             return jsonify(err("built-in items are read-only", code="forbidden")), 403
         updates = []
         params: list = []
-        for field, col, maxlen in [
-            ("pattern", "pattern", 500),
-            ("example_sentence", "example_sentence", 1000),
-            ("explanation_primary", "explanation_primary", 1000),
-            ("explanation_secondary", "explanation_secondary", 1000),
+        for field, col, maxlen, required in [
+            ("pattern", "pattern", 500, True),
+            ("example_sentence", "example_sentence", 1000, True),
+            ("explanation", "explanation", 1500, True),
+            ("explanation_primary", "explanation_primary", 1000, False),
+            ("explanation_secondary", "explanation_secondary", 1000, False),
         ]:
             if field in body:
                 try:
                     v = _coerce_str(body.get(field), max_len=maxlen)
                 except ValueError as e:
                     return jsonify(err(str(e), code="invalid_input")), 400
-                if field == "pattern" and not v:
-                    return jsonify(err("pattern cannot be empty", code="invalid_input")), 400
+                if field == "pattern" and v is None:
+                    return jsonify(err("pattern cannot be null", code="invalid_input")), 400
+                # NOT NULL columns store empty string when the user
+                # passes null/blank. NULL would violate the constraint.
+                if required and v is None:
+                    v = ""
                 updates.append(f"{col}=?")
                 params.append(v)
         if updates:
@@ -198,11 +222,25 @@ def fill_structure():
     partial = {
         "pattern": body.get("pattern"),
         "example_sentence": body.get("example_sentence"),
+        "explanation": body.get("explanation"),
         "explanation_primary": body.get("explanation_primary"),
         "explanation_secondary": body.get("explanation_secondary"),
     }
+    user_settings = settings_svc.get_settings(config.DEFAULT_USER_ID)
+    primary = user_settings.get("explanation_primary")
+    secondary = user_settings.get("explanation_secondary")
     try:
-        filled = llm_svc.fill_structure_via_llm(lang=lang, partial=partial)
+        filled = llm_svc.fill_structure_via_llm(
+            lang=lang,
+            partial=partial,
+            primary=primary,
+            secondary=secondary,
+        )
     except llm_svc.LLMError as e:
         return jsonify(err(str(e), code="llm_error")), 502
+    # Enforce the explanation-language rules at the persistence boundary
+    # so the rules hold even if the LLM service is mocked.
+    llm_svc.apply_explanation_rules(
+        filled, lang=lang, primary=primary, secondary=secondary,
+    )
     return ok(filled)

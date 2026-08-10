@@ -344,6 +344,9 @@ export function renderSettings(host) {
                   : `<span class="badge badge--muted">Not seeded</span>`}
                 ${l.is_built_in ? `<span class="badge badge--builtin">Built-in</span>` : ""}
                 <div class="spacer"></div>
+                ${l.seeded
+                  ? `<button class="btn btn--ghost" data-action="apply-explanations" title="Translate existing rows into the languages set in 'Explanations' above">Apply explanations</button>`
+                  : ""}
                 <button class="btn ${l.seeded ? "btn--danger" : "btn--primary"}" data-action="seed">
                   ${l.seeded ? "Re-seed" : "Initialize"}
                 </button>
@@ -370,6 +373,26 @@ export function renderSettings(host) {
         renderSettings(document.getElementById("app-main"));
         toast({
           title: `${lang} re-initialized`,
+          message: `${res.data.structures || 0} structures, ${res.data.phrases || 0} phrases`,
+          variant: "success",
+        });
+      });
+    });
+    main.querySelectorAll("[data-action='apply-explanations']").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const lang = btn.closest("[data-lang]").dataset.lang;
+        btn.disabled = true;
+        const orig = btn.textContent;
+        btn.textContent = "Translating…";
+        const res = await api.post(`/api/languages/${lang}/apply-explanations`);
+        btn.disabled = false;
+        btn.textContent = orig;
+        if (!res.ok) {
+          toast({ title: "Apply failed", message: res.error, variant: "error" });
+          return;
+        }
+        toast({
+          title: `${lang} explanations updated`,
           message: `${res.data.structures || 0} structures, ${res.data.phrases || 0} phrases`,
           variant: "success",
         });

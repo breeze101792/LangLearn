@@ -184,11 +184,13 @@ def test_seed_via_llm_inserts_rows(fresh, monkeypatch):
 
     payload = {
         "structures": [{"pattern": "S V O",
+                         "explanation": "Target-language usage note.",
                          "explanation_primary": "Basic",
-                         "example_sentence": None,
+                         "example_sentence": "She reads.",
                          "explanation_secondary": None}],
-        "phrases": [{"phrase": "Hi", "explanation_primary": "Hello",
-                      "literal_translation": None,
+        "phrases": [{"phrase": "Hi", "explanation": "Target-language usage note.",
+                      "explanation_primary": "Hello",
+                      "example_sentence": "Hello there.",
                       "explanation_secondary": None}],
     }
 
@@ -215,10 +217,18 @@ def test_seed_via_llm_replaces_previous_llm_rows(fresh, monkeypatch):
     from backend.db import get_conn
     from backend.services import llm as llm_svc
 
-    payload1 = {"structures": [{"pattern": "A", "explanation_primary": "x"}],
-                "phrases": [{"phrase": "a", "explanation_primary": "x"}]}
-    payload2 = {"structures": [{"pattern": "B", "explanation_primary": "y"}],
-                "phrases": [{"phrase": "b", "explanation_primary": "y"}]}
+    payload1 = {"structures": [{"pattern": "A", "explanation": "Note.",
+                                 "explanation_primary": "x",
+                                 "example_sentence": "Example A."}],
+                "phrases": [{"phrase": "a", "explanation": "Note.",
+                              "explanation_primary": "x",
+                              "example_sentence": "Use a."}]}
+    payload2 = {"structures": [{"pattern": "B", "explanation": "Note.",
+                                 "explanation_primary": "y",
+                                 "example_sentence": "Example B."}],
+                "phrases": [{"phrase": "b", "explanation": "Note.",
+                              "explanation_primary": "y",
+                              "example_sentence": "Use b."}]}
 
     calls = {"payload": payload1}
 
@@ -267,8 +277,10 @@ def test_initialize_non_builtin_via_llm_creates_rows(fresh, monkeypatch):
     from backend.services import llm as llm_svc
 
     payload = {
-        "structures": [{"pattern": "S V", "explanation_primary": "ok"}],
-        "phrases": [{"phrase": "Hi", "explanation_primary": "Hello"}],
+        "structures": [{"pattern": "S V", "explanation_primary": "ok",
+                         "example_sentence": "She reads."}],
+        "phrases": [{"phrase": "Hi", "explanation_primary": "Hello",
+                      "example_sentence": "Hello there."}],
     }
 
     def fake(*a, **kw):

@@ -116,7 +116,9 @@ def grade_seed(raw: str) -> dict:
         data = json.loads(raw)
     except Exception as e:
         return {"schema_ok": False, "parse_error": str(e)}
-    errs = _validate(llm_mod.SEED_SCHEMA, data)
+    # Probe case is "Spanish learners with English primary" — target != primary,
+    # so we want explanation_primary required, like the historical shape.
+    errs = _validate(llm_mod.seed_schema(require_primary=True), data)
     if errs:
         return {"schema_ok": False, "schema_errors": errs}
     return {
@@ -163,8 +165,16 @@ def dict_word_prompt(word: str, lang: str, primary: str = "English",
         f"Language: {lang}\nWord: {word}\n"
         f"Primary explanation language: {primary}\n"
         f"Secondary explanation language (optional): {secondary or '(none)'}\n"
-        "Provide 1-3 senses. Each sense has part-of-speech, definitions, "
-        "and explanations in the requested languages."
+        "Provide 1-3 senses. Each sense is an object with EXACTLY these "
+        "fields, using the EXACT names below:\n"
+        "- `pos`: the part of speech (use this exact key, never "
+        "`part_of_speech`)\n"
+        "- `definitions`: a non-empty array of objects (never call this "
+        "`glosses`), each with EXACTLY `glossary` (the gloss/translation) "
+        "and optionally `example` (one natural sentence, may be null)\n"
+        "- `explanations`: an object with `primary` and `secondary` "
+        "(strings or null) in the requested explanation languages\n"
+        "Do not invent any other keys."
     )
 
 
@@ -180,7 +190,7 @@ def seed_prompt(lang: str, n_structures: int, n_phrases: int) -> str:
         f"- {n_structures} common sentence structures (clause patterns with examples).\n"
         f"- {n_phrases} common phrases or idioms with literal translation and explanation.\n"
         "Each item must include explanation_primary in English and "
-        "explanation_secondary in Simplified Chinese."
+        "explanation_secondary in Traditional Chinese."
     )
 
 
@@ -197,7 +207,7 @@ def fill_prompt(lang: str, partial: dict) -> str:
         "Partial input (already-filled fields are non-null and must not be changed):\n"
         + json.dumps(partial, ensure_ascii=False, indent=2) +
         "\nFill any null fields. explanation_primary must be English; "
-        "explanation_secondary should be Simplified Chinese when present."
+        "explanation_secondary should be Traditional Chinese when present."
     )
 
 
@@ -233,7 +243,7 @@ def run(*, model: str, timeout: int, out_dir: Path) -> list[dict]:
         ("seed 3 structures + 5 phrases (es)",
          SEED_SYSTEM,
          {"user": seed_prompt("Spanish", 3, 5),
-          "schema": llm_mod.SEED_SCHEMA,
+          "schema": llm_mod.seed_schema(require_primary=True),
           "schema_name": "seed",
           "temperature": 0.3,
           "grader": lambda raw: grade_seed(raw)}),

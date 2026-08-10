@@ -6,9 +6,9 @@ from flask import Blueprint, jsonify, request
 
 from .. import config
 from ..services import llm as llm_svc
+from ..services import settings as settings_svc
 from ..db import get_conn, transaction
 from ..util import err, is_known_lang, ok
-
 bp = Blueprint("phrases", __name__, url_prefix="/api/phrases")
 
 EDITABLE_SOURCES = ("user", "llm")
@@ -42,8 +42,9 @@ def list_phrases():
     else:
         return jsonify(err("familiar must be 0/1 or true/false", code="invalid_input")), 400
     sql = (
-        "SELECT id, language, phrase, literal_translation, explanation_primary,"
-        "       explanation_secondary, source, familiar, added_at "
+        "SELECT id, language, phrase, example_sentence, explanation,"
+        "       explanation_primary, explanation_secondary, source,"
+        "       familiar, added_at "
         "FROM phrases WHERE user_id=? AND language=?"
     )
     params: list = [config.DEFAULT_USER_ID, lang]
@@ -66,7 +67,12 @@ def add_phrase():
         phrase = _coerce_str(body.get("phrase"), max_len=500)
         if not phrase:
             return jsonify(err("phrase required", code="invalid_input")), 400
-        literal = _coerce_str(body.get("literal_translation"), max_len=500)
+        example = _coerce_str(body.get("example_sentence"), max_len=1000)
+        if not example:
+            return jsonify(err("example_sentence required", code="invalid_input")), 400
+        explanation = _coerce_str(body.get("explanation"), max_len=1500)
+        if not explanation:
+            return jsonify(err("explanation required", code="invalid_input")), 400
         explanation_primary = _coerce_str(body.get("explanation_primary"), max_len=1000)
         explanation_secondary = _coerce_str(body.get("explanation_secondary"), max_len=1000)
         source = body.get("source", "user")
@@ -74,13 +80,21 @@ def add_phrase():
             source = "user"
     except ValueError as e:
         return jsonify(err(str(e), code="invalid_input")), 400
+    # Apply the same explanation-language rules the LLM path uses.
+    user_settings = settings_svc.get_settings(config.DEFAULT_USER_ID)
+    primary = user_settings.get("explanation_primary")
+    secondary = user_settings.get("explanation_secondary")
+    if not llm_svc._should_generate_primary(lang, primary):
+        explanation_primary = None
+    if not llm_svc._should_generate_secondary(primary, secondary):
+        explanation_secondary = None
     with transaction() as conn:
         cur = conn.execute(
-            "INSERT INTO phrases (user_id, language, phrase, literal_translation,"
-            "  explanation_primary, explanation_secondary, source)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (config.DEFAULT_USER_ID, lang, phrase, literal, explanation_primary,
-             explanation_secondary, source),
+            "INSERT INTO phrases (user_id, language, phrase, example_sentence,"
+            "  explanation, explanation_primary, explanation_secondary, source)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (config.DEFAULT_USER_ID, lang, phrase, example, explanation,
+             explanation_primary, explanation_secondary, source),
         )
         new_id = cur.lastrowid
     return ok({"id": new_id, "source": source})
@@ -102,19 +116,24 @@ def update_phrase(item_id: int):
             return jsonify(err("built-in items are read-only", code="forbidden")), 403
         updates = []
         params: list = []
-        for field, col, maxlen in [
-            ("phrase", "phrase", 500),
-            ("literal_translation", "literal_translation", 500),
-            ("explanation_primary", "explanation_primary", 1000),
-            ("explanation_secondary", "explanation_secondary", 1000),
+        for field, col, maxlen, required in [
+            ("phrase", "phrase", 500, True),
+            ("example_sentence", "example_sentence", 1000, True),
+            ("explanation", "explanation", 1500, True),
+            ("explanation_primary", "explanation_primary", 1000, False),
+            ("explanation_secondary", "explanation_secondary", 1000, False),
         ]:
             if field in body:
                 try:
                     v = _coerce_str(body.get(field), max_len=maxlen)
                 except ValueError as e:
                     return jsonify(err(str(e), code="invalid_input")), 400
-                if field == "phrase" and not v:
-                    return jsonify(err("phrase cannot be empty", code="invalid_input")), 400
+                if field == "phrase" and v is None:
+                    return jsonify(err("phrase cannot be null", code="invalid_input")), 400
+                # NOT NULL columns store empty string when the user
+                # passes null/blank. NULL would violate the constraint.
+                if required and v is None:
+                    v = ""
                 updates.append(f"{col}=?")
                 params.append(v)
         if updates:
@@ -179,12 +198,26 @@ def fill_phrase():
     if not isinstance(lang, str) or not is_known_lang(lang):
         return jsonify(err("invalid language", code="invalid_lang")), 400
     partial = {
-        "literal_translation": body.get("literal_translation"),
+        "example_sentence": body.get("example_sentence"),
+        "explanation": body.get("explanation"),
         "explanation_primary": body.get("explanation_primary"),
         "explanation_secondary": body.get("explanation_secondary"),
     }
+    user_settings = settings_svc.get_settings(config.DEFAULT_USER_ID)
+    primary = user_settings.get("explanation_primary")
+    secondary = user_settings.get("explanation_secondary")
     try:
-        filled = llm_svc.fill_phrase_via_llm(lang=lang, partial=partial)
+        filled = llm_svc.fill_phrase_via_llm(
+            lang=lang,
+            partial=partial,
+            primary=primary,
+            secondary=secondary,
+        )
     except llm_svc.LLMError as e:
         return jsonify(err(str(e), code="llm_error")), 502
+    # Enforce the explanation-language rules at the persistence boundary
+    # so the rules hold even if the LLM service is mocked.
+    llm_svc.apply_explanation_rules(
+        filled, lang=lang, primary=primary, secondary=secondary,
+    )
     return ok(filled)

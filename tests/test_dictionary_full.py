@@ -189,6 +189,57 @@ def test_llm_provider_propagates_llm_errors(fresh, monkeypatch):
         llm_provider.lookup("x", "en")
 
 
+def test_llm_provider_propagates_schema_errors_with_diagnostic_message(fresh, monkeypatch):
+    """The LLM provider re-raises LLMSchemaError. The error message
+    must include the schema name and a sample of the last response so
+    the user can debug a non-OpenAI proxy that returns malformed
+    output."""
+    from backend.services.dictionaries import llm as llm_provider
+    from backend.services import llm as llm_svc
+
+    def boom(*, lang, word, **kw):
+        raise llm_svc.LLMSchemaError(
+            "LLM did not produce valid JSON for schema 'dict_word' after 2 "
+            "attempts. Last error: Additional properties are not allowed "
+            "('language' was unexpected). Last response (truncated to 400 "
+            "chars): '{\"language\": \"en\", \"senses\": [{}]}'"
+        )
+    monkeypatch.setattr(llm_svc, "lookup_word_via_llm", boom)
+
+    with pytest.raises(llm_svc.LLMSchemaError) as exc:
+        llm_provider.lookup("press", "en")
+    msg = str(exc.value)
+    # The schema name is included so the user knows which call failed.
+    assert "dict_word" in msg
+    # The specific validation error is included.
+    assert "Additional properties are not allowed" in msg
+    # A sample of the bad response is included.
+    assert "language" in msg
+
+
+def test_chain_continues_when_llm_provider_schema_errors(fresh, monkeypatch):
+    """If the LLM provider raises a schema error, the chain should
+    record it in `errors` and continue. A non-OpenAI proxy that
+    misbehaves on the LLM step must not break the wordnet fallback."""
+    from backend.services.dictionaries import registry
+    from backend.services import llm as llm_svc
+
+    def boom(*, lang, word, **kw):
+        raise llm_svc.LLMSchemaError("bad JSON")
+    monkeypatch.setattr(llm_svc, "lookup_word_via_llm", boom)
+
+    # Single-element chain, only the LLM provider. It fails, so the
+    # result is empty with one error recorded.
+    result = registry.lookup_via_chain(
+        word="press", lang="en",
+        chain=[{"name": "llm", "enabled": True}],
+    )
+    assert result.entry.is_empty
+    assert len(result.errors) == 1
+    assert result.errors[0]["provider"] == "llm"
+    assert "bad JSON" in result.errors[0]["error"]
+
+
 # --- registry helpers --------------------------------------------------
 
 

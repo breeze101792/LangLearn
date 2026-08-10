@@ -30,7 +30,7 @@ def test_structures_add_and_edit_user():
     r = client.post("/api/structures",
                     json={"language": "en", "pattern": "S V O",
                           "explanation_primary": "Basic SVO",
-                          "source": "user"})
+                          "source": "user", "example_sentence": "...", "explanation": "..."})
     assert r.status_code == 200
     sid = r.get_json()["data"]["id"]
 
@@ -77,7 +77,7 @@ def test_phrases_add_and_edit():
     r = client.post("/api/phrases",
                     json={"language": "en", "phrase": "Hi",
                           "explanation_primary": "Casual hello",
-                          "source": "user"})
+                          "source": "user", "explanation": "...", "example_sentence": "..."})
     assert r.status_code == 200
     pid = r.get_json()["data"]["id"]
 
@@ -112,7 +112,7 @@ def test_structures_default_familiar_is_false():
     client = app.test_client()
     r = client.post("/api/structures",
                     json={"language": "en", "pattern": "S V O",
-                          "explanation_primary": "Basic", "source": "user"})
+                          "explanation_primary": "Basic", "source": "user", "example_sentence": "...", "explanation": "..."})
     sid = r.get_json()["data"]["id"]
     items = client.get("/api/structures?lang=en").get_json()["data"]["items"]
     row = next(i for i in items if i["id"] == sid)
@@ -129,12 +129,12 @@ def test_structures_patch_familiar_marks_and_filters():
 
     a = client.post("/api/structures",
                     json={"language": "en", "pattern": "A B C",
-                          "explanation_primary": "a", "source": "user"}).get_json()["data"]["id"]
+                          "explanation_primary": "a", "source": "user", "example_sentence": "...", "explanation": "..."}).get_json()["data"]["id"]
     b = client.post("/api/structures",
                     json={"language": "en", "pattern": "D E F",
-                          "explanation_primary": "b", "source": "user"}).get_json()["data"]["id"]
+                          "explanation_primary": "b", "source": "user", "example_sentence": "...", "explanation": "..."}).get_json()["data"]["id"]
 
-    r = client.patch(f"/api/structures/{a}", json={"familiar": True})
+    r = client.patch(f"/api/structures/{a}", json={"familiar": True, "example_sentence": "...", "explanation": "...", "pattern": "..."})
     assert r.status_code == 200
     assert r.get_json()["data"]["familiar"] is True
 
@@ -174,7 +174,7 @@ def test_structures_patch_familiar_validates_body():
     client = app.test_client()
     sid = client.post("/api/structures",
                       json={"language": "en", "pattern": "S V O",
-                            "explanation_primary": "x"}).get_json()["data"]["id"]
+                            "explanation_primary": "x", "example_sentence": "...", "explanation": "..."}).get_json()["data"]["id"]
 
     r = client.patch(f"/api/structures/{sid}", json={})
     assert r.status_code == 400
@@ -200,7 +200,7 @@ def test_phrases_default_familiar_is_false():
     client = app.test_client()
     pid = client.post("/api/phrases",
                       json={"language": "en", "phrase": "Hi",
-                            "explanation_primary": "x", "source": "user"}).get_json()["data"]["id"]
+                            "explanation_primary": "x", "source": "user", "explanation": "...", "example_sentence": "..."}).get_json()["data"]["id"]
     row = next(i for i in client.get("/api/phrases?lang=en").get_json()["data"]["items"]
                if i["id"] == pid)
     assert row["familiar"] is False or row["familiar"] == 0
@@ -214,8 +214,8 @@ def test_phrases_patch_familiar_marks_and_filters():
     client = app.test_client()
     pid = client.post("/api/phrases",
                       json={"language": "en", "phrase": "Hi",
-                            "explanation_primary": "x", "source": "user"}).get_json()["data"]["id"]
-    r = client.patch(f"/api/phrases/{pid}", json={"familiar": True})
+                            "explanation_primary": "x", "source": "user", "explanation": "...", "example_sentence": "..."}).get_json()["data"]["id"]
+    r = client.patch(f"/api/phrases/{pid}", json={"familiar": True, "explanation": "...", "example_sentence": "...", "phrase": "..."})
     assert r.status_code == 200
     items = client.get("/api/phrases?lang=en&familiar=1").get_json()["data"]["items"]
     assert any(i["id"] == pid for i in items)
@@ -246,7 +246,7 @@ def test_phrases_patch_familiar_validates_body():
     client = app.test_client()
     pid = client.post("/api/phrases",
                       json={"language": "en", "phrase": "Hi",
-                            "explanation_primary": "x", "source": "user"}).get_json()["data"]["id"]
+                            "explanation_primary": "x", "source": "user", "explanation": "...", "example_sentence": "..."}).get_json()["data"]["id"]
     assert client.patch(f"/api/phrases/{pid}", json={}).status_code == 400
     assert client.patch(f"/api/phrases/{pid}", json={"familiar": "yes"}).status_code == 400
 
@@ -290,9 +290,9 @@ def test_structures_patch_unfamiliar_round_trip():
     client = app.test_client()
     sid = client.post("/api/structures",
                       json={"language": "en", "pattern": "S V O",
-                            "explanation_primary": "x", "source": "user"}).get_json()["data"]["id"]
+                            "explanation_primary": "x", "source": "user", "example_sentence": "...", "explanation": "..."}).get_json()["data"]["id"]
 
-    client.patch(f"/api/structures/{sid}", json={"familiar": True})
+    client.patch(f"/api/structures/{sid}", json={"familiar": True, "example_sentence": "...", "explanation": "...", "pattern": "..."})
     client.patch(f"/api/structures/{sid}", json={"familiar": False})
 
     items = client.get("/api/structures?lang=en&familiar=0").get_json()["data"]["items"]

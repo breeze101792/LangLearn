@@ -35,7 +35,7 @@ The probe runs 5 cases against `response_format: json_schema strict: True`:
 | dict_word "bank" (en) | `DICT_WORD_SCHEMA` | Polysemy, common word |
 | dict_word "set" (en) | `DICT_WORD_SCHEMA` | Polysemy, mixed POS |
 | dict_word "desafortunadamente" (es) | `DICT_WORD_SCHEMA` | Non-English, long word |
-| seed 3 structures + 5 phrases (es) | `SEED_SCHEMA` | Bilingual (en + zh) generation, count adherence |
+| seed 3 structures + 5 phrases (es) | `seed_schema(require_primary=True)` | Bilingual (en + zh) generation, count adherence |
 | fill_structure "be used to doing" (en) | `FILL_STRUCTURE_SCHEMA` | Preservation of non-null fields |
 
 Each case measures: schema-validity, latency, and (where relevant) field

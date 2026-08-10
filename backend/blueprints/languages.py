@@ -51,6 +51,27 @@ def initialize_language(code: str):
     return ok(result)
 
 
+@bp.post("/<code>/apply-explanations")
+def apply_explanations(code: str):
+    """Translate existing target-language structures and phrases into
+    the user's current ``explanation_primary`` /
+    ``explanation_secondary`` native languages. Does not touch the
+    target-language content; only the explanation columns are
+    overwritten. See the
+    [explanation-language rules](../../../../../docs/design/architecture.md#explanation-language-rules)
+    for what gets filled vs skipped."""
+    if not is_valid_lang(code):
+        return jsonify(err("invalid language code", code="invalid_code")), 400
+    try:
+        result = seed_svc.apply_explanations(code)
+    except Exception as e:
+        from ..services.llm import LLMError
+        if isinstance(e, LLMError):
+            return jsonify(err(str(e), code="llm_error")), 502
+        raise
+    return ok(result)
+
+
 @bp.get("/<code>/seed-status")
 def seed_status(code: str):
     if not is_valid_lang(code):

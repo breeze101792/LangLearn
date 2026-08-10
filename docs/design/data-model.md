@@ -87,7 +87,8 @@ id                     INTEGER PRIMARY KEY AUTOINCREMENT
 user_id                INTEGER NOT NULL DEFAULT 1
 language               TEXT NOT NULL
 pattern                TEXT NOT NULL
-example_sentence       TEXT
+example_sentence       TEXT NOT NULL          -- target language, required
+explanation            TEXT NOT NULL          -- target language, paragraph, required
 explanation_primary    TEXT
 explanation_secondary  TEXT
 source                 TEXT NOT NULL DEFAULT 'built-in'   -- 'built-in' | 'user' | 'llm'
@@ -96,6 +97,13 @@ added_at               TEXT NOT NULL DEFAULT (datetime('now'))
 
 `source='built-in'` rows are read-only. PUT/DELETE returns 403.
 
+`pattern`, `example_sentence`, and `explanation` are always in the
+target language. The two `explanation_*` columns are filled by the LLM,
+but only when they add a language different from `language`. See the
+[Explanation-language rules](architecture.md#explanation-language-rules)
+section for the full table and the rules around when each
+`explanation_*` is required vs skipped.
+
 ### phrases
 
 ```sql
@@ -103,14 +111,22 @@ id                     INTEGER PRIMARY KEY AUTOINCREMENT
 user_id                INTEGER NOT NULL DEFAULT 1
 language               TEXT NOT NULL
 phrase                 TEXT NOT NULL
-literal_translation    TEXT
+example_sentence       TEXT NOT NULL          -- target language, required (one natural sentence)
+explanation            TEXT NOT NULL          -- target language, paragraph, required
 explanation_primary    TEXT
 explanation_secondary  TEXT
 source                 TEXT NOT NULL DEFAULT 'built-in'
 added_at               TEXT NOT NULL DEFAULT (datetime('now'))
 ```
 
-Same read-only rule as structures.
+Same read-only rule as structures, same explanation-language rules.
+`phrase`, `example_sentence`, and `explanation` are all in the target
+language. `example_sentence` is one natural sentence showing the
+phrase in context (not a translation). `explanation` is a
+paragraph-length usage note. Phrases no longer have a
+`literal_translation` column — that was removed by migration 006
+because for idioms and proverbs the literal rendering was almost
+always identical to the phrase itself.
 
 ### seed_jobs
 
@@ -144,17 +160,30 @@ applied_at  TEXT NOT NULL DEFAULT (datetime('now'))
   "structures": [
     {"pattern": "Subject + be + going to + verb",
      "example_sentence": "I am going to travel next month.",
-     "explanation_primary": "Used to express future plans or intentions.",
-     "explanation_secondary": "用于表达将来的计划或打算。"}
+     "explanation": "Used to express future plans or intentions. Common in everyday speech and informal writing."}
   ],
   "phrases": [
     {"phrase": "How do you do?",
-     "literal_translation": null,
-     "explanation_primary": "Formal greeting...",
-     "explanation_secondary": "初次见面的正式问候。"}
+     "example_sentence": "How do you do? I don't think we've met.",
+     "explanation": "A formal British greeting used when meeting someone for the first time. The response is conventionally 'How do you do?' rather than an answer."}
   ]
 }
 ```
+
+The built-in seed carries only **target-language content** including
+the `explanation` paragraph and the `example_sentence`. The
+`explanation_primary` and `explanation_secondary` columns are
+intentionally absent — they're filled in by the AI per the user's
+settings (see
+[Explanation-language rules](architecture.md#explanation-language-rules)).
+Loading the seed leaves those columns NULL; the user re-seeds (LLM
+path) or clicks "Apply explanations" to populate them for their
+specific primary/secondary natives.
+
+The English built-in is generated via
+`scripts/generate_explanations.py` (requires `OPENAI_API_KEY`).
+After running, the script patches `backend/data/built-in/english.json`
+in place.
 
 Counts: 51 structures, 103 phrases. Adding another built-in language is
 "drop a JSON file with the same shape; mark `is_built_in=1` in `config.py`".
