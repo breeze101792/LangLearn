@@ -28,11 +28,13 @@ export function renderWordCard(entry, opts = {}) {
   const lang = entry.language || "";
   const headword = entry.word || "";
 
+  const actions = opts.actions || "";
   const head = compact ? "" : `
     <header class="word-card__head">
       <h2 class="word-card__headword">${escapeHtml(headword)}</h2>
       <span class="word-card__pos">${escapeHtml(lang)}</span>
       <span class="word-card__source">${sourceBadge(source)}</span>
+      <span class="word-card__actions">${actions}</span>
     </header>
   `;
 

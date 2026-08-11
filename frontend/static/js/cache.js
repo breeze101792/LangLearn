@@ -86,6 +86,25 @@ export const cache = {
     all[k] = prev;
     writeAll(all);
   },
+  /**
+   * Drop a single (word, source) entry. Used by the "Regenerate" button so
+   * the next LLM lookup hits the server instead of replaying the cached
+   * result. Other providers' cached entries for the same word are kept.
+   */
+  clear(lang, word, source) {
+    if (!lang || !word || !source) return;
+    const k = keyFor(lang, word);
+    const all = readAll();
+    const hit = all[k];
+    if (!hit || !hit.bySource || !hit.bySource[source]) return;
+    delete hit.bySource[source];
+    if (Object.keys(hit.bySource).length === 0) {
+      delete all[k];
+    } else {
+      all[k] = hit;
+    }
+    writeAll(all);
+  },
   clearLang(lang) {
     const all = readAll();
     const prefix = `${NAMESPACE}:${lang}:`;

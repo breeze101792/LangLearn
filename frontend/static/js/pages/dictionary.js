@@ -108,6 +108,10 @@ export function renderDictionary(host) {
   loadProviderMeta(lang);
 }
 
+// When true, the in-flight lookup bypasses the local cache so a fresh
+// request is sent to the server. Reset by `doLookup` after the call lands.
+let skipNextCache = false;
+
 async function loadProviderMeta(lang) {
   if (providerMetaLoaded) return providerMeta;
   const res = await api.get(`/api/dictionary/providers?lang=${encodeURIComponent(lang)}`);
@@ -385,10 +389,13 @@ async function doLookup(word, lang, providerOverride) {
   // accept an entry produced by that provider; otherwise walk the chain in
   // order and use the first provider that has the word cached — this is what
   // resets the dictionary back to the leading provider on a fresh search.
+  // A regenerate call forces a fresh fetch and skips the cache entirely.
   const chainOrder = switcherProviders(lang).map((p) => p.name);
-  const cached = providerOverride
-    ? cache.get(lang, word, providerOverride)
-    : cache.getInChain(lang, word, chainOrder);
+  const cached = skipNextCache
+    ? null
+    : (providerOverride
+        ? cache.get(lang, word, providerOverride)
+        : cache.getInChain(lang, word, chainOrder));
   if (cached) {
     if (myToken !== lookupToken) return;
     lastLookup.word = word;
@@ -407,6 +414,7 @@ async function doLookup(word, lang, providerOverride) {
   // 2) server chain (or override)
   const body = { lang, word };
   if (providerOverride) body.provider = providerOverride;
+  skipNextCache = false;
   const res = await api.post("/api/dictionary/lookup", body);
   if (myToken !== lookupToken) return; // a newer search started meanwhile
   if (!res.ok) {
@@ -438,11 +446,16 @@ async function doLookup(word, lang, providerOverride) {
 
 function renderEntry(host, entry, source, word, lang, vocabState) {
   const settings = store.get().settings || {};
+  const isLLM = source === "llm";
+  const actions = isLLM
+    ? `<button type="button" class="btn btn--sm btn--ghost" data-action="regenerate" title="Re-run the AI lookup for this word">↻ Regenerate</button>`
+    : "";
   const html = renderWordCard(entry, {
     source,
     languages: store.get().languages || [],
     explanationPrimary: settings.explanation_primary,
     explanationSecondary: settings.explanation_secondary,
+    actions,
   });
   host.innerHTML = `
     <div class="card">
@@ -452,6 +465,7 @@ function renderEntry(host, entry, source, word, lang, vocabState) {
   const card = host.querySelector(".card");
   renderSwitcherInto(card, lang, source || null, vocabState);
   bindVocabActions(card, { word, lang, entry, source, vocabState });
+  bindRegenerateAction(card, { word, lang });
 }
 
 function renderNoResult(host, word, lang, suggestions, providerErrors) {
@@ -531,6 +545,29 @@ function maybeShowUndoToast(word, lang, autoAdded) {
         toast({ title: `Removed "${word}"`, message: "Restore it from the vocab list", variant: "info", ttl: 2000 });
       },
     }],
+  });
+}
+
+function bindRegenerateAction(card, ctx) {
+  const btn = card.querySelector('[data-action="regenerate"]');
+  if (!btn) return;
+  btn.addEventListener("click", async () => {
+    btn.disabled = true;
+    const original = btn.textContent;
+    btn.textContent = "Regenerating…";
+    cache.clear(ctx.lang, ctx.word, "llm");
+    skipNextCache = true;
+    try {
+      await doLookup(ctx.word, ctx.lang, "llm");
+    } finally {
+      // doLookup re-renders the card; the original button is gone, so
+      // restoring the label is best-effort and only matters if a stale
+      // button somehow survives a render failure.
+      if (btn.isConnected) {
+        btn.disabled = false;
+        btn.textContent = original;
+      }
+    }
   });
 }
 

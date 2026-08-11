@@ -80,7 +80,7 @@ LANGUAGE_CATALOG: list[dict] = [
     {"code": "es", "display_name": "Spanish", "is_built_in": 0},
     {"code": "ja", "display_name": "Japanese", "is_built_in": 0},
     {"code": "pt", "display_name": "Portuguese", "is_built_in": 0},
-    {"code": "zh", "display_name": "Chinese", "is_built_in": 0},
+    {"code": "zh", "display_name": "Traditional Chinese", "is_built_in": 0},
     {"code": "fr", "display_name": "French", "is_built_in": 0},
     {"code": "de", "display_name": "German", "is_built_in": 0},
 ]

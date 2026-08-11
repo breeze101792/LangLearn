@@ -518,16 +518,26 @@ def _normalize_dict_word(data: dict) -> dict:
 
 def lookup_word_via_llm(*, lang: str, word: str, explanation_primary: str | None,
                         explanation_secondary: str | None) -> dict:
+    primary = explanation_primary or lang
+    secondary = explanation_secondary
+    # When any of the three languages is Chinese, steer the model toward
+    # Traditional characters. Naming "Traditional Chinese" alone is not
+    # enough for some models — they default to Simplified — so we add a
+    # quiet, script-agnostic rule to the system prompt.
+    script_note = ""
+    if "zh" in (lang, primary, secondary):
+        script_note = " For Chinese content, use Traditional Chinese characters."
     system = (
         "You are a bilingual dictionary. Return ONLY a JSON object matching the "
         "provided schema. Do not include prose, code fences, or commentary. "
         "Provide concise, accurate glosses and one natural example per sense."
+        + script_note
     )
     user = (
         f"Language: {lang}\n"
         f"Word: {word}\n"
-        f"Primary explanation language: {explanation_primary or lang}\n"
-        f"Secondary explanation language (optional): {explanation_secondary or '(none)'}\n"
+        f"Primary explanation language: {primary}\n"
+        f"Secondary explanation language (optional): {secondary or '(none)'}\n"
         "Provide 1-3 senses. Each sense is an object with EXACTLY these "
         "fields, using the EXACT names below:\n"
         "- `pos`: the part of speech (use this exact key, never "
