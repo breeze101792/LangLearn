@@ -55,6 +55,76 @@ def test_lookup_word_happy_path(fresh, monkeypatch):
     assert out["senses"][0]["definitions"][0]["glossary"] == "A house."
 
 
+def test_lookup_word_prompt_specifies_target_lang_for_glossary_and_example(
+    fresh, monkeypatch,
+):
+    """The user prompt must tell the model that `glossary` and `example`
+    are written in the TARGET language (the word's language), not in the
+    explanation languages — otherwise we get English glosses/example
+    sentences for Chinese words, which is what prompted this fix."""
+    from backend.services import llm
+
+    captured = {}
+
+    def fake_post(url, json=None, headers=None, timeout=None):
+        captured["payload"] = json or {}
+        return _mock_openai_response(_json.dumps({
+            "senses": [{
+                "pos": "noun",
+                "definitions": [{"glossary": "ok"}],
+            }],
+        }))
+
+    monkeypatch.setattr("backend.services.llm.requests.post", fake_post)
+    llm.lookup_word_via_llm(
+        lang="zh", word="從",
+        explanation_primary="en", explanation_secondary="fr",
+    )
+    user_msg = next(
+        (m for m in captured["payload"]["messages"] if m["role"] == "user"),
+        None,
+    )
+    assert user_msg is not None
+    text = user_msg["content"]
+    # Glossary definition must be tied to the target language.
+    assert "Traditional Chinese" in text
+    # Example sentence must also be tied to the target language.
+    # Appears at least twice (once for glossary context, once for example).
+    assert text.count("Traditional Chinese") >= 2
+    # The prompt must explicitly contrast glossary (target lang) with
+    # explanations (other languages), so the model doesn't conflate them.
+    assert "explanation" in text.lower()
+
+
+def test_lookup_word_prompt_for_english_word(fresh, monkeypatch):
+    """Same contract for English: glossary/example in English, explanations
+    in the user's other languages."""
+    from backend.services import llm
+
+    captured = {}
+
+    def fake_post(url, json=None, headers=None, timeout=None):
+        captured["payload"] = json or {}
+        return _mock_openai_response(_json.dumps({
+            "senses": [{
+                "pos": "noun",
+                "definitions": [{"glossary": "ok"}],
+            }],
+        }))
+
+    monkeypatch.setattr("backend.services.llm.requests.post", fake_post)
+    llm.lookup_word_via_llm(
+        lang="en", word="dog",
+        explanation_primary="zh", explanation_secondary=None,
+    )
+    user_msg = next(
+        (m for m in captured["payload"]["messages"] if m["role"] == "user"),
+        None,
+    )
+    assert user_msg is not None
+    assert "English" in user_msg["content"]
+
+
 def test_lookup_word_retries_on_invalid_json(fresh, monkeypatch):
     from backend.services import llm
 

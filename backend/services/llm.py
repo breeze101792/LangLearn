@@ -543,10 +543,15 @@ def lookup_word_via_llm(*, lang: str, word: str, explanation_primary: str | None
         "- `pos`: the part of speech (use this exact key, never "
         "`part_of_speech`)\n"
         "- `definitions`: a non-empty array of objects (never call this "
-        "`glosses`), each with EXACTLY `glossary` (the gloss/translation) "
-        "and optionally `example` (one natural sentence, may be null)\n"
+        "`glosses`), each with EXACTLY `glossary` (a concise definition "
+        f"OF THE WORD, written in the target language ({_lang_name(lang)}) "
+        "— not a translation into another language) and optionally "
+        f"`example` (one natural sentence USING the word, written in "
+        f"the target language ({_lang_name(lang)}); may be null)\n"
         "- `explanations`: an object with `primary` and `secondary` "
-        "(strings or null) in the requested explanation languages\n"
+        "(strings or null) in the requested explanation languages — these "
+        "are the translations/explanations for a reader who doesn't "
+        f"speak {_lang_name(lang)}\n"
         "Do not invent any other keys."
     )
     return complete_json(
