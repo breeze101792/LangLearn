@@ -1,6 +1,6 @@
 // Main entry point. Sets up router, theme, initial data load, nav rendering.
 
-import { api } from "./api.js";
+import { api, setUnauthorizedHandler } from "./api.js";
 import { store } from "./state.js";
 import { renderNavLinks } from "./components/nav-links.js";
 import { renderLangSwitcher } from "./components/lang-switcher.js";
@@ -10,6 +10,17 @@ async function boot() {
   applyStoredTheme();
   bindThemeCycle();
   bindContextMenu();
+
+  setUnauthorizedHandler(() => {
+    window.location.replace("/");
+  });
+
+  const statusRes = await api.get("/api/auth/status");
+  if (statusRes.ok && statusRes.data && statusRes.data.auth_required) {
+    // Server is gated; the SPA at "/" is only served when authenticated.
+    // If we're here on "/" then the server let us in, so proceed.
+  }
+
   await loadInitial();
   renderNavLinks(currentHash());
   renderLangSwitcher();
@@ -23,6 +34,26 @@ async function boot() {
   document.addEventListener("app:language-changed", () => {
     route();
   });
+
+  bindLogout();
+}
+
+function bindLogout() {
+  const nav = document.querySelector(".nav__inner");
+  if (!nav) return;
+  if (document.getElementById("logout-btn")) return;
+  const btn = document.createElement("button");
+  btn.id = "logout-btn";
+  btn.className = "nav__icon-btn";
+  btn.title = "Sign out";
+  btn.setAttribute("aria-label", "Sign out");
+  btn.textContent = "⎋";
+  btn.addEventListener("click", async () => {
+    btn.disabled = true;
+    await api.post("/api/auth/logout");
+    window.location.replace("/");
+  });
+  nav.appendChild(btn);
 }
 
 async function loadInitial() {

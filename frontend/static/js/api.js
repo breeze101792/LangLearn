@@ -1,5 +1,11 @@
 // Thin fetch wrapper. All endpoints return {ok, data} or {ok:false, error}.
 
+let onUnauthorized = null;
+
+export function setUnauthorizedHandler(fn) {
+  onUnauthorized = fn;
+}
+
 async function request(method, path, body) {
   const opts = { method, headers: { "Content-Type": "application/json" }, credentials: "same-origin" };
   if (body !== undefined) opts.body = JSON.stringify(body);
@@ -16,7 +22,9 @@ async function request(method, path, body) {
     return { ok: false, error: "invalid_json", data: null, status: r.status };
   }
   if (r.status === 401) {
-    // future-proof for auth; for now treat as fatal
+    if (onUnauthorized) {
+      try { onUnauthorized(); } catch (e) { console.error("unauthorized handler failed", e); }
+    }
     return { ok: false, error: data?.error || "unauthorized", data: null, status: 401 };
   }
   if (!r.ok) {

@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="en" data-theme="auto">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="LangLearn — sign in">
+  <title>LangLearn — Sign in</title>
+  <link rel="icon" href="/static/icons/icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/css/tokens.css">
+  <link rel="stylesheet" href="/static/css/app.css">
+  <style>
+    .login-page {
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      padding: var(--sp-6) var(--sp-4);
+    }
+    .login-card {
+      width: 100%;
+      max-width: 360px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--r-lg);
+      box-shadow: var(--shadow-2);
+      padding: var(--sp-8);
+    }
+    .login-card__title { margin: 0 0 var(--sp-2); font-size: 20px; font-weight: 600; }
+    .login-card__subtitle { margin: 0 0 var(--sp-6); color: var(--text-secondary); font-size: 14px; }
+    .login-form { display: flex; flex-direction: column; gap: var(--sp-3); }
+    .login-form label { font-size: 13px; color: var(--text-secondary); }
+    .login-form input {
+      width: 100%;
+      padding: var(--sp-3);
+      font: inherit;
+      color: var(--text-primary);
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--r-md);
+    }
+    .login-form input:focus-visible { outline: none; border-color: var(--accent); box-shadow: var(--focus-ring); }
+    .login-form button { padding: var(--sp-3); font-weight: 500; }
+    .login-error {
+      color: var(--danger);
+      background: var(--danger-soft);
+      border: 1px solid var(--danger);
+      padding: var(--sp-2) var(--sp-3);
+      border-radius: var(--r-md);
+      font-size: 13px;
+      display: none;
+    }
+    .login-error[data-shown="1"] { display: block; }
+    .login-note {
+      margin-top: var(--sp-6);
+      padding-top: var(--sp-4);
+      border-top: 1px solid var(--border);
+      font-size: 12px;
+      color: var(--text-muted);
+      line-height: 1.5;
+    }
+    .login-note strong { color: var(--text-secondary); font-weight: 600; }
+    .login-note code { font-size: 11px; }
+  </style>
+</head>
+<body>
+  <main class="login-page">
+    <div class="login-card">
+      <h1 class="login-card__title">LangLearn</h1>
+      <p class="login-card__subtitle">Enter the password to continue.</p>
+      <form id="login-form" class="login-form" autocomplete="current-password" novalidate>
+        <label for="password">Password</label>
+        <input
+          id="password"
+          name="password"
+          type="password"
+          autocomplete="current-password"
+          required
+          autofocus
+          spellcheck="false"
+          autocapitalize="off"
+        >
+        <button id="submit" type="submit" class="btn btn--primary">Sign in</button>
+        <div id="error" class="login-error" role="alert"></div>
+      </form>
+      <div class="login-note">
+        <strong>Having trouble signing in?</strong>
+        The session cookie is marked <code>Secure</code> automatically
+        when the request comes from a public domain or HTTPS. On the local
+        network (private IP or <code>.lan</code> host) it stays plain HTTP
+        so the cookie works. No configuration required.
+      </div>
+    </div>
+  </main>
+  <script>
+    (function () {
+      var form = document.getElementById("login-form");
+      var input = document.getElementById("password");
+      var submit = document.getElementById("submit");
+      var errorEl = document.getElementById("error");
+
+      function showError(msg) {
+        errorEl.textContent = msg;
+        errorEl.setAttribute("data-shown", "1");
+      }
+      function clearError() {
+        errorEl.textContent = "";
+        errorEl.removeAttribute("data-shown");
+      }
+
+      function go() { window.location.replace("/"); }
+
+      form.addEventListener("submit", function (ev) {
+        ev.preventDefault();
+        clearError();
+        var pw = input.value;
+        if (!pw) { showError("Password is required."); return; }
+        submit.disabled = true;
+        fetch("/api/auth/login", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "same-origin",
+          body: JSON.stringify({ password: pw }),
+        })
+        .then(function (r) { return r.json().then(function (b) { return { ok: r.ok, body: b }; }); })
+        .then(function (res) {
+          if (res.ok && res.body && res.body.ok) { go(); return; }
+          var code = res.body && res.body.code;
+          if (code === "rate_limited") {
+            showError("Too many attempts. Please wait a minute and try again.");
+          } else if (code === "invalid_credentials") {
+            showError("Wrong password.");
+          } else {
+            showError("Sign in failed. Please try again.");
+          }
+          submit.disabled = false;
+          input.focus();
+        })
+        .catch(function () {
+          showError("Network error. Please try again.");
+          submit.disabled = false;
+        });
+      });
+    })();
+  </script>
+</body>
+</html>

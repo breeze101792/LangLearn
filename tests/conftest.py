@@ -18,9 +18,15 @@ def clean_state(monkeypatch, tmp_path):
     monkeypatch.setenv("OPENAI_API_KEY", "")
     monkeypatch.setenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
     monkeypatch.setenv("OPENAI_MODEL", "gpt-test")
+    # config.load_dotenv() pulls in a developer .env; tests must not inherit
+    # LANGLEARN_PASSWORD from it. Auth-gated tests re-enable it via their own
+    # fixture.
+    monkeypatch.delenv("LANGLEARN_PASSWORD", raising=False)
     from backend import db
     db.init_schema()
     # Reset module-level in-memory state.
     from backend.services import vocab as vocab_svc
     vocab_svc._undo_tokens.clear()
+    from backend.services import auth_gate
+    auth_gate._login_attempts.clear()
     yield tmp_path

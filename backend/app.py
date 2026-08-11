@@ -10,13 +10,14 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from flask import Flask, jsonify, send_from_directory
+from flask import Flask, jsonify, request, send_from_directory
 
 from . import config
 from .db import init_schema
 from .services.dictionaries import registry as dict_registry
 from .services.dictionaries import suggest as suggest_svc
 from .services import settings as settings_svc
+from .services import auth_gate
 from .util import err
 
 log = logging.getLogger("langlearn")
@@ -36,6 +37,7 @@ def create_app() -> Flask:
     )
     app.config["JSON_AS_ASCII"] = False
     app.config["DEBUG"] = config.DEBUG
+    auth_gate.configure_app(app)
 
     init_schema()
     dict_registry.bootstrap()
@@ -45,6 +47,8 @@ def create_app() -> Flask:
 
     @app.get("/")
     def index():
+        if auth_gate.is_auth_enabled() and not auth_gate.is_authenticated():
+            return send_from_directory(config.TEMPLATES_DIR, "login.html")
         return send_from_directory(config.TEMPLATES_DIR, "index.html")
 
     @app.get("/manifest.json")
@@ -56,6 +60,8 @@ def create_app() -> Flask:
         resp = send_from_directory(config.STATIC_DIR, "sw.js")
         resp.headers["Service-Worker-Allowed"] = "/"
         return resp
+
+    _register_auth_gate(app)
 
     @app.errorhandler(404)
     def not_found(_e):
@@ -89,6 +95,33 @@ def _register_blueprints(app: Flask) -> None:
     app.register_blueprint(vocab_bp)
     app.register_blueprint(structures_bp)
     app.register_blueprint(phrases_bp)
+
+
+def _register_auth_gate(app: Flask) -> None:
+    """Gate every ``/api/*`` route (except the auth blueprint's own endpoints)
+    behind a session cookie when ``LANGLEARN_PASSWORD`` is set. Static assets,
+    the SPA, and ``/api/auth/*`` are always reachable."""
+    _EXEMPT_API = (
+        "/api/auth/status",
+        "/api/auth/login",
+        "/api/auth/logout",
+        "/api/auth/whoami",
+    )
+
+    @app.before_request
+    def _enforce_auth():
+        if not auth_gate.is_auth_enabled():
+            return None
+        path = request.path
+        if not path.startswith("/api/"):
+            return None
+        if path in _EXEMPT_API:
+            return None
+        if auth_gate.is_authenticated(request):
+            return None
+        resp = jsonify(err("unauthorized", code="unauthorized"))
+        resp.status_code = 401
+        return resp
 
 
 def main() -> None:
