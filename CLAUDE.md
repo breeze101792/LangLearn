@@ -36,9 +36,11 @@ Flask app factory (`backend/app.py`) + blueprints by resource + services for bus
 | Business logic for X | `backend/services/X.py` |
 | Schema | new file in `backend/migrations/00X_*.sql` |
 | New dictionary provider | `backend/services/dictionaries/X.py` + register in `registry.bootstrap()` |
+| New TTS provider | `backend/services/tts/X.py` + register in `backend/services/tts/registry.bootstrap()` |
 | LLM schema | `backend/services/llm.py` (top of file) |
 | Built-in seed | `backend/data/built-in/<code>.json` |
 | Frontend page X | `frontend/static/js/pages/X.js` + add route in `frontend/static/js/main.js` |
+| Speaker button binding | `frontend/static/js/components/speak.js` (wire via `bindSpeakButtons`) |
 | CSS tokens | `frontend/static/css/tokens.css` |
 | CSS components | `frontend/static/css/app.css` |
 

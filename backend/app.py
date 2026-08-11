@@ -18,6 +18,7 @@ from .services.dictionaries import registry as dict_registry
 from .services.dictionaries import suggest as suggest_svc
 from .services import settings as settings_svc
 from .services import auth_gate
+from .services.tts import registry as tts_registry
 from .util import err
 
 log = logging.getLogger("langlearn")
@@ -41,6 +42,7 @@ def create_app() -> Flask:
 
     init_schema()
     dict_registry.bootstrap()
+    tts_registry.bootstrap()
     suggest_svc.warmup()
     settings_svc.create_default_settings()
     _register_blueprints(app)
@@ -87,6 +89,7 @@ def _register_blueprints(app: Flask) -> None:
     from .blueprints.vocab import bp as vocab_bp
     from .blueprints.structures import bp as structures_bp
     from .blueprints.phrases import bp as phrases_bp
+    from .blueprints.tts import bp as tts_bp
 
     app.register_blueprint(auth_bp)
     app.register_blueprint(settings_bp)
@@ -95,6 +98,7 @@ def _register_blueprints(app: Flask) -> None:
     app.register_blueprint(vocab_bp)
     app.register_blueprint(structures_bp)
     app.register_blueprint(phrases_bp)
+    app.register_blueprint(tts_bp)
 
 
 def _register_auth_gate(app: Flask) -> None:

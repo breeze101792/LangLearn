@@ -7,11 +7,27 @@ import { renderLangSwitcher } from "../components/lang-switcher.js";
 
 let activeSection = "general";
 let dirty = {};
+let ttsProviders = [];  // populated from /api/tts/providers
+
+async function loadTtsProviders() {
+  const res = await api.get("/api/tts/providers");
+  if (res && res.ok && res.data) {
+    ttsProviders = res.data.providers || [];
+  } else {
+    ttsProviders = [];
+  }
+}
 
 export function renderSettings(host) {
   const state = store.get();
   const settings = state.settings || {};
   const languages = state.languages || [];
+  // Fetch TTS provider metadata once when the page mounts. We don't block
+  // initial render on it; the section will repopulate as soon as it lands.
+  loadTtsProviders().then(() => {
+    const main = host.querySelector("#settings-main");
+    if (main) renderMain();
+  });
 
   host.innerHTML = `
     <header class="page-head">
@@ -131,9 +147,22 @@ export function renderSettings(host) {
           <div class="settings__row">
             <div class="settings__row__label">Active language</div>
             <select id="active-lang" class="select" style="max-width: 240px">
-              ${languages.map((l) => `<option value="${l.code}" ${l.code === s.active_language ? "selected" : ""}>${l.display_name} (${l.code})</option>`).join("")}
+              ${languages.map((l) => `<option value="${l.code}" ${l.code === s.active_language ? "selected" : ""}>${escapeHtml(l.display_name)} (${l.code})</option>`).join("")}
             </select>
           </div>
+        </div>
+
+        <h2 class="card__title" style="margin-top: var(--sp-6)">Pronunciation</h2>
+        <div class="card">
+          <div class="settings__row">
+            <div class="settings__row__label">TTS provider</div>
+            ${ttsProviders.length
+              ? `<select id="tts-provider" class="select" style="max-width: 280px" title="Backend text-to-speech module. The speaker button on word cards uses this provider.">
+                  ${ttsProviders.map((p) => `<option value="${escapeHtml(p.name)}" ${s.tts_provider === p.name ? "selected" : ""}>${escapeHtml(p.display_name || p.name)}</option>`).join("")}
+                </select>`
+              : `<span class="field__hint">No TTS providers available.</span>`}
+          </div>
+          <p class="field__hint" style="margin: 0">The speaker button on every word card uses this provider. Audio is cached so repeat lookups don't re-hit the network.</p>
         </div>
       </div>
     `;
@@ -172,6 +201,13 @@ export function renderSettings(host) {
       dirty.active_language = e.target.value;
       renderActions();
     });
+    const ttsSelect = main.querySelector("#tts-provider");
+    if (ttsSelect) {
+      ttsSelect.addEventListener("change", (e) => {
+        dirty.tts_provider = e.target.value;
+        renderActions();
+      });
+    }
   }
 
   function renderDictChain(main) {

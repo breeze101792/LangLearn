@@ -9,6 +9,7 @@ import { cache } from "../cache.js";
 import { store } from "../state.js";
 import { toast } from "../components/toast.js";
 import { renderWordCard } from "../components/word-card.js";
+import { bindSpeakButtons } from "../components/speak.js";
 
 // Metadata fetched from /api/dictionary/providers keyed by name.
 let providerMeta = {};
@@ -466,6 +467,7 @@ function renderEntry(host, entry, source, word, lang, vocabState) {
   renderSwitcherInto(card, lang, source || null, vocabState);
   bindVocabActions(card, { word, lang, entry, source, vocabState });
   bindRegenerateAction(card, { word, lang });
+  bindSpeakButtons(card);
 }
 
 function renderNoResult(host, word, lang, suggestions, providerErrors) {

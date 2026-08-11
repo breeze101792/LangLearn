@@ -21,6 +21,7 @@ DEFAULTS: dict[str, Any] = {
     "dict_chain_json": {},
     "theme": "auto",
     "show_readings": 1,
+    "tts_provider": "google",
 }
 
 ALLOWED_KEYS = set(DEFAULTS.keys())
@@ -62,8 +63,8 @@ def create_default_settings(user_id: int = config.DEFAULT_USER_ID) -> None:
             "INSERT OR IGNORE INTO settings ("
             "  user_id, active_language, auto_add_vocab, page_size,"
             "  explanation_primary, explanation_secondary, dict_chain_json,"
-            "  theme, show_readings"
-            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "  theme, show_readings, tts_provider"
+            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 user_id,
                 DEFAULTS["active_language"],
@@ -74,6 +75,7 @@ def create_default_settings(user_id: int = config.DEFAULT_USER_ID) -> None:
                 chain_json,
                 DEFAULTS["theme"],
                 DEFAULTS["show_readings"],
+                DEFAULTS["tts_provider"],
             ),
         )
 
@@ -156,6 +158,16 @@ def _coerce(key: str, value: Any) -> Any:
         if not isinstance(value, dict):
             raise ValueError("dict_chain_json must be an object")
         return _clean_dict_chain(value)
+    if key == "tts_provider":
+        if not isinstance(value, str):
+            raise ValueError("tts_provider must be a string")
+        # Validate against the live TTS registry. We import lazily to avoid
+        # a circular import: the tts module imports config, which loads
+        # before services.
+        from .tts import registry as tts_registry
+        if value not in tts_registry.available():
+            raise ValueError(f"unknown tts provider: {value!r}")
+        return value
     raise ValueError(f"unhandled key {key}")
 
 
@@ -222,7 +234,7 @@ def _clean_dict_chain(value: Any) -> dict[str, list[dict]]:
 def _row_to_dict(row) -> dict:
     chain_raw = row["dict_chain_json"]
     chain = json.loads(chain_raw) if chain_raw else {}
-    return {
+    out = {
         "user_id": row["user_id"],
         "active_language": row["active_language"],
         "auto_add_vocab": bool(row["auto_add_vocab"]),
@@ -233,3 +245,10 @@ def _row_to_dict(row) -> dict:
         "theme": row["theme"],
         "show_readings": bool(row["show_readings"]),
     }
+    # `tts_provider` is added in migration 007; older DB rows may not have
+    # the column. Tolerate that with a fallback to the default.
+    try:
+        out["tts_provider"] = row["tts_provider"]
+    except (IndexError, KeyError):
+        out["tts_provider"] = DEFAULTS["tts_provider"]
+    return out

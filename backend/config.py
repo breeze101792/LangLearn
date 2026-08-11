@@ -90,3 +90,24 @@ OPENAI_BASE_URL: str = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com
 OPENAI_MODEL: str = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
 
 LLM_TIMEOUT_SECONDS: int = int(os.environ.get("LLM_TIMEOUT_SECONDS", "120"))
+
+
+# ---- TTS (pronunciation) -----------------------------------------------------
+#
+# `TTS_LANG_MAP` translates the app's `lang` codes into the TTS provider's
+# language codes. The only non-trivial entry is `zh` (Traditional Chinese)
+# which needs `zh-TW` for the Google endpoint so we get the right script.
+#
+# `TTS_TIMEOUT_SECONDS` caps the upstream network call. The disk cache lives
+# under `data/tts_cache/<lang>/<sha1>.<ext>` to keep repeat lookups offline.
+TTS_LANG_MAP: dict[str, str] = {
+    "zh": "zh-TW",
+}
+
+TTS_TIMEOUT_SECONDS: int = int(os.environ.get("TTS_TIMEOUT_SECONDS", "15"))
+
+
+def tts_cache_dir() -> Path:
+    p = data_dir() / "tts_cache"
+    p.mkdir(parents=True, exist_ok=True)
+    return p

@@ -222,6 +222,23 @@ code, pre, kbd, samp { font-family: var(--font-mono); }
   border-bottom: 1px solid var(--border);
 }
 .word-card__headword { font-size: 22px; font-weight: 600; margin: 0; }
+.word-card__speak {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 30px; height: 30px;
+  padding: 0;
+  background: var(--surface-sunken);
+  color: var(--text-primary);
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 120ms, transform 120ms;
+}
+.word-card__speak:hover { background: var(--accent-soft); }
+.word-card__speak:active { transform: scale(0.94); }
+.word-card__speak[disabled] { opacity: 0.6; cursor: progress; }
+.word-card__speak--busy { background: var(--accent-soft); }
 .word-card__reading { font-size: 14px; color: var(--text-secondary); }
 .word-card__pos {
   font-size: 12px; font-weight: 600; padding: 2px var(--sp-2);

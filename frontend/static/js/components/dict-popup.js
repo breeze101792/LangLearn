@@ -7,6 +7,7 @@ import { store } from "../state.js";
 import { cache } from "../cache.js";
 import { toast } from "./toast.js";
 import { renderWordCard } from "./word-card.js";
+import { bindSpeakButtons } from "./speak.js";
 
 const POPUP_ID = "dict-popup";
 const ESC_KEY = "Escape";
@@ -314,7 +315,9 @@ function renderEntry(entry, source) {
   });
   popupBody.innerHTML = `<div class="card">${html}</div>`;
   activeEntry = entry;
-  paintSwitcher(popupBody.querySelector(".card"), source || null);
+  const card = popupBody.querySelector(".card");
+  paintSwitcher(card, source || null);
+  bindSpeakButtons(card);
 }
 
 function paintSwitcher(card, activeName) {

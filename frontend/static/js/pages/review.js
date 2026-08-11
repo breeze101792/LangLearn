@@ -4,6 +4,7 @@ import { api } from "../api.js";
 import { store } from "../state.js";
 import { toast } from "../components/toast.js";
 import { renderWordCard, entryFromVocabRow, findCachedEntry } from "../components/word-card.js";
+import { bindSpeakButtons } from "../components/speak.js";
 
 let session = null; // { items, idx, sessionSize }
 
@@ -110,6 +111,7 @@ function reveal(host, item) {
     explanationSecondary: settings.explanation_secondary,
   });
   card.appendChild(answer);
+  bindSpeakButtons(answer);
 
   const gradeRow = document.createElement("div");
   gradeRow.className = "review-card__grade-row";

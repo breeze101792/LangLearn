@@ -29,9 +29,13 @@ export function renderWordCard(entry, opts = {}) {
   const headword = entry.word || "";
 
   const actions = opts.actions || "";
+  const speakBtn = headword && lang
+    ? `<button type="button" class="word-card__speak" data-action="speak" data-word="${escapeHtml(headword)}" data-lang="${escapeHtml(lang)}" aria-label="Pronounce ${escapeHtml(headword)}" title="Pronounce ${escapeHtml(headword)}">🔊</button>`
+    : "";
   const head = compact ? "" : `
     <header class="word-card__head">
       <h2 class="word-card__headword">${escapeHtml(headword)}</h2>
+      ${speakBtn}
       <span class="word-card__pos">${escapeHtml(lang)}</span>
       <span class="word-card__source">${sourceBadge(source)}</span>
       <span class="word-card__actions">${actions}</span>

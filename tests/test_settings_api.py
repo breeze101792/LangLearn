@@ -206,5 +206,6 @@ def test_settings_response_includes_all_keys(fresh):
     data = r.get_json()["data"]
     for key in ("active_language", "auto_add_vocab", "page_size",
                  "explanation_primary", "explanation_secondary",
-                 "dict_chain_json", "theme", "show_readings"):
+                 "dict_chain_json", "theme", "show_readings",
+                 "tts_provider"):
         assert key in data
