@@ -979,3 +979,96 @@ body.nav-drawer-open { overflow: hidden; }
 }
 .transfer-merge .row-action { width: 110px; }
 .transfer-mapping input.input { width: 140px; }
+
+/* Analyze / Refine shared sections */
+.analyze-section { margin-bottom: var(--sp-5); }
+.analyze-section__title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin: 0 0 var(--sp-2);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.analyze-section__items { display: flex; flex-direction: column; gap: var(--sp-3); }
+
+/* Refine */
+.refine-card { padding: var(--sp-4); }
+.refine-card__text {
+  font-size: 17px;
+  line-height: 1.6;
+  margin: 0 0 var(--sp-3);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.refine-card__text:last-child { margin-bottom: 0; }
+.refine-card__native {
+  font-size: 14px;
+  color: var(--text-secondary);
+  margin: var(--sp-2) 0 0;
+}
+.refine-edits {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+.refine-edits li {
+  display: flex;
+  gap: var(--sp-3);
+  align-items: flex-start;
+}
+.refine-edits code {
+  background: var(--surface-sunken);
+  padding: 1px 6px;
+  border-radius: var(--r-sm);
+  font-size: 14px;
+}
+.refine-edit-legend {
+  list-style: none;
+  padding: 0;
+  margin: var(--sp-3) 0 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  font-size: 14px;
+}
+.refine-edit-legend li {
+  display: flex;
+  gap: var(--sp-2);
+  align-items: flex-start;
+}
+.refine-edit-legend code {
+  background: var(--surface-sunken);
+  padding: 1px 5px;
+  border-radius: var(--r-sm);
+  font-size: 13px;
+}
+.refine-edit-marker {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: var(--r-circle);
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.refine-mark {
+  background: var(--warning-soft, rgba(255, 200, 80, 0.25));
+  color: inherit;
+  border-radius: 3px;
+  padding: 0 2px;
+}
+.refine-mark[data-idx]:hover,
+.refine-edit-marker:hover {
+  background: var(--accent);
+  color: var(--text-inverse);
+  cursor: pointer;
+}

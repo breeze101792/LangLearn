@@ -86,6 +86,8 @@ function route() {
   if (hash === "#/vocabulary") return import("./pages/vocabulary.js").then((m) => m.renderVocabulary(main));
   if (hash === "#/structures") return import("./pages/structures.js").then((m) => m.renderStructures(main));
   if (hash === "#/phrases") return import("./pages/phrases.js").then((m) => m.renderPhrases(main));
+  if (hash === "#/analyze") return import("./pages/analyze.js").then((m) => m.renderAnalyze(main));
+  if (hash === "#/refine") return import("./pages/refine.js").then((m) => m.renderRefine(main));
   if (hash === "#/settings") return import("./pages/settings.js").then((m) => m.renderSettings(main));
   return import("./pages/dictionary.js").then((m) => m.renderDictionary(main));
 }

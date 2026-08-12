@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
 from typing import Any, Callable
 
@@ -112,23 +113,32 @@ def apply_explanation_rules(
     secondary: str | None,
 ) -> None:
     """Null out explanation_primary / explanation_secondary on every
-    structure and phrase in ``payload`` according to the four-case rule
-    table in the module docstring.
+    structure, phrase, and word in ``payload`` according to the four-case
+    rule table in the module docstring.
 
-    ``payload`` may be either a seed-shaped object
-    (``{"structures": [...], "phrases": [...]}``) or a single
-    fill-shaped object (with ``explanation_primary`` and
-    ``explanation_secondary`` at the top level). Mutates in place.
+    ``payload`` may be one of:
+
+    * a seed-shaped object ``{"structures": [...], "phrases": [...]}``
+      (legacy)
+    * an analyze-shaped object
+      ``{"structures": [...], "phrases": [...], "words": [...]}``
+    * a single fill-shaped object with ``explanation_primary`` and
+      ``explanation_secondary`` at the top level
+
+    Mutates in place.
     """
     keep_p = _should_generate_primary(lang, primary)
     keep_s = _should_generate_secondary(primary, secondary)
-    if "structures" in payload or "phrases" in payload:
+    if "structures" in payload or "phrases" in payload or "words" in payload:
         for s in (payload.get("structures") or []):
             if isinstance(s, dict):
                 _strip_explanations(s, keep_primary=keep_p, keep_secondary=keep_s)
         for p in (payload.get("phrases") or []):
             if isinstance(p, dict):
                 _strip_explanations(p, keep_primary=keep_p, keep_secondary=keep_s)
+        for w in (payload.get("words") or []):
+            if isinstance(w, dict):
+                _strip_explanations(w, keep_primary=keep_p, keep_secondary=keep_s)
         return
     if "explanation_primary" in payload or "explanation_secondary" in payload:
         _strip_explanations(
@@ -296,6 +306,7 @@ def complete_json(
     temperature: float = 0.2,
     max_retries: int = 1,
     normalize: Callable[[dict], dict] | None = None,
+    timeout: int | None = None,
 ) -> dict:
     """Send a prompt, get a JSON dict matching `schema`. Retries on schema error.
 
@@ -306,6 +317,10 @@ def complete_json(
     schema keys. This keeps strict validation while tolerating the
     schem-agnostic aliases LLMs like to invent. It must not raise; any
     residual mismatches still surface as a validation error.
+
+    ``timeout`` overrides the per-request HTTP timeout (defaults to
+    ``config.LLM_TIMEOUT_SECONDS``). Larger prompts that ask for many
+    fields (e.g. Analyze) can need a bigger budget than the default.
 
     On failure, raises ``LLMSchemaError`` whose message includes the
     final validation error and a truncated copy of the last response
@@ -329,6 +344,7 @@ def complete_json(
             schema=schema,
             schema_name=schema_name,
             temperature=temperature,
+            timeout=timeout,
         )
         last_raw = raw
         try:
@@ -361,12 +377,14 @@ def complete_json(
 
 
 class _BaseClient:
-    def chat(self, *, system, user, schema, schema_name, temperature) -> str:
+    def chat(self, *, system, user, schema, schema_name, temperature,
+             timeout: int | None = None) -> str:
         raise NotImplementedError
 
 
 class OpenAICompatClient(_BaseClient):
-    def chat(self, *, system, user, schema, schema_name, temperature) -> str:
+    def chat(self, *, system, user, schema, schema_name, temperature,
+             timeout: int | None = None) -> str:
         import os
         api_key = os.environ.get("OPENAI_API_KEY", "") or config.OPENAI_API_KEY
         url = (os.environ.get("OPENAI_BASE_URL") or config.OPENAI_BASE_URL).rstrip("/") + "/chat/completions"
@@ -395,7 +413,7 @@ class OpenAICompatClient(_BaseClient):
         headers = {"Content-Type": "application/json"}
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
-        return _post_json(url, payload, headers)
+        return _post_json(url, payload, headers, timeout=timeout)
 
     def supports_strict_schema(self) -> bool:
         return True
@@ -418,12 +436,14 @@ def _strip_markdown_fence(text: str) -> str:
     return s.strip()
 
 
-def _post_json(url: str, payload: dict, headers: dict) -> str:
+def _post_json(url: str, payload: dict, headers: dict,
+               *, timeout: int | None = None) -> str:
+    effective_timeout = timeout if timeout is not None else config.LLM_TIMEOUT_SECONDS
     try:
-        r = requests.post(url, json=payload, headers=headers, timeout=config.LLM_TIMEOUT_SECONDS)
+        r = requests.post(url, json=payload, headers=headers, timeout=effective_timeout)
     except requests.Timeout as e:
         raise LLMTimeout(
-            f"request timed out after {config.LLM_TIMEOUT_SECONDS}s "
+            f"request timed out after {effective_timeout}s "
             f"(set OPENAI_TIMEOUT_SECONDS env var to increase; current "
             f"LLM_TIMEOUT_SECONDS={config.LLM_TIMEOUT_SECONDS}): {e}"
         ) from e
@@ -972,7 +992,488 @@ def fill_phrase_via_llm(*, lang: str, partial: dict,
     return items[0] if items else {}
 
 
-# ---- apply_explanations_via_llm ---------------------------------------
+# ---- analyze_text_via_llm ----------------------------------------------
+#
+# "Analyze" takes a free-form sentence or paragraph in the target language
+# and returns three lists extracted from it: sentence structures (clause
+# patterns worth learning), phrases/idioms (multi-word expressions), and
+# difficult words (terms the learner is likely to need to look up). Each
+# item carries the same explanation fields the rest of the app uses
+# (`explanation` in the target language, plus `explanation_primary` and
+# `explanation_secondary` in the user's natives), so the frontend can
+# "Add" any item to the existing structures/phrases/vocab tables with a
+# single click — no second LLM call.
+#
+# The response is a single object; the model is not asked to return
+# anything the existing schemas already ask for, but the explanation
+# rules still apply (skip `explanation_primary` when the target language
+# equals the user's primary native, skip `explanation_secondary` when it
+# would be redundant with primary or unset).
+
+ANALYZE_SCHEMA: dict = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["structures", "phrases", "words"],
+    "properties": {
+        "structures": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["pattern", "example_sentence", "explanation"],
+                "properties": {
+                    "pattern": {"type": "string", "minLength": 1, "maxLength": 500},
+                    "example_sentence": {"type": "string", "minLength": 1, "maxLength": 1000},
+                    "explanation": {"type": "string", "minLength": 1, "maxLength": 1500},
+                    "explanation_primary": {"type": ["string", "null"], "maxLength": 1000},
+                    "explanation_secondary": {"type": ["string", "null"], "maxLength": 1000},
+                },
+            },
+        },
+        "phrases": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["phrase", "example_sentence", "explanation"],
+                "properties": {
+                    "phrase": {"type": "string", "minLength": 1, "maxLength": 500},
+                    "example_sentence": {"type": "string", "minLength": 1, "maxLength": 1000},
+                    "explanation": {"type": "string", "minLength": 1, "maxLength": 1500},
+                    "explanation_primary": {"type": ["string", "null"], "maxLength": 1000},
+                    "explanation_secondary": {"type": ["string", "null"], "maxLength": 1000},
+                },
+            },
+        },
+        "words": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["word", "pos", "glossary"],
+                "properties": {
+                    "word": {"type": "string", "minLength": 1, "maxLength": 200},
+                    "pos": {"type": "string", "maxLength": 32},
+                    "glossary": {"type": "string", "minLength": 1, "maxLength": 1000},
+                    "example": {"type": ["string", "null"], "maxLength": 1000},
+                    "explanation_primary": {"type": ["string", "null"], "maxLength": 1000},
+                    "explanation_secondary": {"type": ["string", "null"], "maxLength": 1000},
+                },
+            },
+        },
+    },
+}
+
+
+def _build_analyze_user_prompt(
+    *, lang: str, text: str,
+    target_name: str, primary_name: str, secondary_name: str,
+    keep_primary: bool, keep_secondary: bool,
+) -> str:
+    parts: list[str] = [
+        f"Target language (the one being learned): {target_name} ({lang}).",
+        f"User input (a sentence or short paragraph in {target_name}):",
+        text,
+        "",
+        "Extract up to 5 sentence structures (clause patterns), up to 5 phrases/idioms,",
+        "and up to 8 difficult words that a learner of {lang} would benefit from studying.".format(lang=target_name),
+        "",
+        "Definitions:",
+        f"- 'structures': clause patterns worth learning, with one example sentence",
+        f"  from the input showing the pattern. `pattern` is the skeleton, e.g. ",
+        f"  'X makes Y Z' or 'A rather than B'. `example_sentence` is a verbatim",
+        f"  (or lightly cleaned-up) sentence from the input. `explanation` (in",
+        f"  {target_name}) is a short usage note.",
+        f"- 'phrases': multi-word expressions worth memorizing (collocations,",
+        f"  idioms, set phrases). `phrase` is the expression itself. `example_sentence`",
+        f"  is a verbatim sentence from the input using the phrase. `explanation`",
+        f"  (in {target_name}) is a short usage note.",
+        f"- 'words': single words from the input that are uncommon or carry",
+        f"  meaning that's not obvious from context. `word` is the lemma form,",
+        f"  `pos` is its part of speech, `glossary` is a short definition in",
+        f"  {target_name}, and `example` is an optional short phrase showing",
+        f"  it used in context (in {target_name}).",
+        "",
+        f"All example_sentence / phrase / example values must be in {target_name}.",
+    ]
+    if keep_primary:
+        parts.append(
+            f"For each item, include explanation_primary in {primary_name} (a short"
+            f" translation or note for a reader who doesn't speak {target_name})."
+        )
+    else:
+        parts.append(
+            f"Do NOT include explanation_primary: the target language "
+            f"({target_name}) already shows the item itself."
+        )
+    if keep_secondary:
+        parts.append(
+            f"For each item, include explanation_secondary in {secondary_name}."
+        )
+    else:
+        parts.append("Do NOT include explanation_secondary.")
+    parts.append(
+        "If the input is too short or too simple to extract useful items,"
+        " return empty arrays (not invented content)."
+    )
+    return "\n".join(parts)
+
+
+def _normalize_analyze(data: dict) -> dict:
+    """Repair common field-name variants non-OpenAI models produce for the
+    analyze schema. Like the dict_word normalizer, must never raise: runs
+    before strict validation on every attempt.
+
+    - `word`/lemma case-folded + truncated to 200 chars.
+    - drop `definitions` / `meanings` from word items (the schema only
+      allows `glossary`).
+    - structures/phrases: drop any unknown keys so strict validation passes.
+    """
+    for kind in ("structures", "phrases"):
+        for item in (data.get(kind) or []):
+            if not isinstance(item, dict):
+                continue
+            for key in list(item):
+                if key not in (
+                    "pattern", "phrase",
+                    "example_sentence",
+                    "explanation",
+                    "explanation_primary",
+                    "explanation_secondary",
+                ):
+                    item.pop(key, None)
+    for w in (data.get("words") or []):
+        if not isinstance(w, dict):
+            continue
+        if isinstance(w.get("word"), str):
+            w["word"] = w["word"].strip()[:200]
+        # Promote `definition` -> `glossary` if the model conflated them.
+        if not w.get("glossary") and isinstance(w.get("definition"), str):
+            w["glossary"] = w["definition"]
+        if not w.get("example") and isinstance(w.get("sentence"), str):
+            w["example"] = w["sentence"]
+        for key in list(w):
+            if key not in (
+                "word", "pos", "glossary", "example",
+                "explanation_primary", "explanation_secondary",
+            ):
+                w.pop(key, None)
+    return data
+
+
+def analyze_text_via_llm(
+    *, lang: str, text: str,
+    primary: str | None = None,
+    secondary: str | None = None,
+) -> dict:
+    """Ask the LLM to extract structures, phrases, and hard words from
+    ``text`` (in ``lang``). Returns the parsed dict matching
+    :data:`ANALYZE_SCHEMA`. The same explanation-language rules used
+    elsewhere apply (see :data:`_should_generate_primary` and friends):
+    ``explanation_primary`` is nulled out when the target language equals
+    the user's primary native, and ``explanation_secondary`` is nulled
+    out when it would be redundant with primary or unset.
+
+    Raises :class:`LLMError` on network or schema failures.
+    """
+    if not isinstance(text, str) or not text.strip():
+        raise ValueError("text required")
+    text = text.strip()
+    if len(text) > 4000:
+        # Cap input so the prompt + per-item explanations stays inside a
+        # single LLM call. 4000 is well above a paragraph but well below
+        # a chapter — long enough for the page's use case, short enough
+        # to keep the schema-strict response inside most proxies' timeouts.
+        text = text[:4000]
+    keep_primary = _should_generate_primary(lang, primary)
+    keep_secondary = _should_generate_secondary(primary, secondary)
+    target_name = _lang_name(lang)
+    primary_name = _lang_name(primary) if primary else ""
+    secondary_name = _lang_name(secondary) if secondary else ""
+
+    script_note = ""
+    if "zh" in (lang, primary, secondary):
+        script_note = " For Chinese content, use Traditional Chinese characters."
+
+    system = (
+        "You extract language-learning content from a short text. Return ONLY "
+        "a JSON object matching the schema. No prose, no code fences."
+        + script_note
+    )
+    user = _build_analyze_user_prompt(
+        lang=lang, text=text,
+        target_name=target_name,
+        primary_name=primary_name,
+        secondary_name=secondary_name,
+        keep_primary=keep_primary,
+        keep_secondary=keep_secondary,
+    )
+    data = complete_json(
+        schema=ANALYZE_SCHEMA,
+        schema_name="analyze_text",
+        system=system,
+        user=user,
+        temperature=0.2,
+        max_retries=0,
+        normalize=_normalize_analyze,
+        timeout=ANALYZE_TIMEOUT_SECONDS,
+    )
+    # Post-process the same way the seed/fill paths do, so a chatty
+    # model that returns a redundant `explanation_primary` for a
+    # target language that equals the user's primary native still ends
+    # up with that field nulled out in the DB / UI.
+    apply_explanation_rules(
+        data, lang=lang, primary=primary, secondary=secondary,
+    )
+    return data
+
+
+# Analyze asks for up to 5 + 5 + 8 items each with up to three
+# explanation fields, so the schema-strict response can easily hit
+# 8-15k characters. On slow local proxies the default global LLM
+# timeout (180s) is too tight even for a single attempt, and a retry
+# on a near-miss is wasted user-facing time — better to fail fast and
+# let the user click again than to block the page for six minutes.
+ANALYZE_TIMEOUT_SECONDS: int = int(
+    os.environ.get("LLM_ANALYZE_TIMEOUT_SECONDS", "600")
+)
+
+
+# ---- refine_text_via_llm -----------------------------------------------
+#
+# "Refine" takes a free-form sentence or short paragraph in the target
+# language and returns:
+#
+#   * `corrected` — the same text with grammar / spelling / word-choice
+#     fixes. Stays in the target language.
+#   * `native` — a more idiomatic, native-speaker version of the same
+#     meaning, in the target language. Often a different sentence, not
+#     just a different word order.
+#   * `edits` — a list of small, in-place changes, each with the
+#     original span, the suggested span, and a one-line reason. The UI
+#     uses this to underline the bad bits and show what to change.
+#   * `explanation` — a short paragraph in the target language
+#     summarizing the main issues and patterns to watch for.
+#
+# `corrected` and `native` are always in the target language. The
+# `edits` reasons are also in the target language (a learner reading
+# "use past tense, not present" learns the grammar term in context).
+# The model is also asked to provide `explanation_primary` and
+# `explanation_secondary` so non-target readers can see the same
+# feedback in their native language — the explanation-language rules
+# in :func:`apply_explanation_rules` still apply, so the redundant
+# fields get nulled out.
+#
+# Like Analyze, this is a single LLM call that produces a sizable
+# response (potentially several thousand characters), and a slow
+# near-miss is worse for the user than a quick fail. We use the same
+# dedicated timeout and `max_retries=0` policy as Analyze.
+
+REFINE_SCHEMA: dict = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["corrected", "native", "edits", "explanation"],
+    "properties": {
+        "corrected": {"type": "string", "minLength": 1, "maxLength": 4000},
+        "native":    {"type": "string", "minLength": 1, "maxLength": 4000},
+        "edits": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["original", "suggested", "reason"],
+                "properties": {
+                    "original":  {"type": "string", "minLength": 1, "maxLength": 500},
+                    "suggested": {"type": "string", "minLength": 1, "maxLength": 500},
+                    "reason":    {"type": "string", "minLength": 1, "maxLength": 500},
+                },
+            },
+        },
+        "explanation":          {"type": "string", "minLength": 1, "maxLength": 1500},
+        "explanation_primary":  {"type": ["string", "null"], "maxLength": 1000},
+        "explanation_secondary": {"type": ["string", "null"], "maxLength": 1000},
+    },
+}
+
+
+REFINE_TIMEOUT_SECONDS: int = int(
+    os.environ.get("LLM_REFINE_TIMEOUT_SECONDS", "600")
+)
+
+
+def _build_refine_user_prompt(
+    *, lang: str, text: str,
+    target_name: str, primary_name: str, secondary_name: str,
+    keep_primary: bool, keep_secondary: bool,
+) -> str:
+    parts: list[str] = [
+        f"Target language (the one being learned): {target_name} ({lang}).",
+        f"User input (a sentence or short paragraph in {target_name}):",
+        text,
+        "",
+        "Produce four fields:",
+        f"- `corrected`: the input rewritten so it is grammatical and natural,",
+        f"  in {target_name}. Make minimal changes — fix errors, don't rewrite the style.",
+        f"- `native`: a more idiomatic version a fluent speaker would actually say,",
+        f"  in {target_name}. This may be a noticeably different sentence.",
+        f"- `edits`: an ordered list of small, in-place changes from `corrected`",
+        f"  (or from `native` if the change is the rewrite itself), each with",
+        f"  `original` (the bad span, copied verbatim from the input), `suggested`",
+        f"  (the fixed span, copied verbatim from `corrected` or `native`), and",
+        f"  `reason` (a short note in {target_name} explaining the change). Order",
+        f"  most-important changes first. If the input is already correct, return",
+        f"  an empty `edits` list.",
+        f"- `explanation`: a short paragraph in {target_name} summarizing the main",
+        f"  issues and the patterns to watch for next time. 2-4 sentences.",
+        "",
+        f"All values inside `corrected`, `native`, `edits[i].original`,",
+        f"`edits[i].suggested`, and `explanation` must be in {target_name}.",
+    ]
+    if keep_primary:
+        parts.append(
+            f"Also include `explanation_primary`: a short translation of "
+            f"`explanation` for a reader who doesn't speak {target_name}, "
+            f"written in {primary_name}."
+        )
+    else:
+        parts.append(
+            f"Do NOT include `explanation_primary`: {target_name} already shows "
+            f"the explanation."
+        )
+    if keep_secondary:
+        parts.append(
+            f"Also include `explanation_secondary` in {secondary_name}."
+        )
+    else:
+        parts.append("Do NOT include `explanation_secondary`.")
+    parts.append(
+        "Return ONLY a JSON object matching the schema. No prose, no code fences."
+    )
+    return "\n".join(parts)
+
+
+def _normalize_refine(data: dict) -> dict:
+    """Repair common field-name variants non-OpenAI models produce for
+    the refine schema. Must never raise: runs before strict validation
+    on every attempt.
+
+    - `native` / `native_version` -> `native`
+    - `rewrite` / `improved` -> `corrected`
+    - `changes` / `fixes` / `suggestions` -> `edits`
+    - per-edit: `from` / `before` -> `original`; `to` / `after` ->
+      `suggested`; `note` / `why` -> `reason`
+    - any non-string `reason` is stringified; unknown keys are dropped.
+    """
+    if "native_version" in data and "native" not in data:
+        data["native"] = data.pop("native_version")
+    if "rewrite" in data and "corrected" not in data:
+        data["corrected"] = data.pop("rewrite")
+    if "improved" in data and "corrected" not in data:
+        data["corrected"] = data.pop("improved")
+    if "native" not in data and "more_native" in data:
+        data["native"] = data.pop("more_native")
+    for alias in ("changes", "fixes", "suggestions"):
+        if alias in data and "edits" not in data:
+            data["edits"] = data.pop(alias)
+            break
+    for key in list(data):
+        if key not in (
+            "corrected", "native", "edits", "explanation",
+            "explanation_primary", "explanation_secondary",
+        ):
+            data.pop(key, None)
+    edits = data.get("edits")
+    if isinstance(edits, list):
+        for e in edits:
+            if not isinstance(e, dict):
+                continue
+            if "original" not in e:
+                for alias in ("from", "before", "bad", "input"):
+                    if alias in e:
+                        e["original"] = e.pop(alias)
+                        break
+            if "suggested" not in e:
+                for alias in ("to", "after", "fixed", "replacement", "good"):
+                    if alias in e:
+                        e["suggested"] = e.pop(alias)
+                        break
+            if "reason" not in e:
+                for alias in ("note", "why", "explanation", "message"):
+                    if alias in e:
+                        e["reason"] = e.pop(alias)
+                        break
+            for key in list(e):
+                if key not in ("original", "suggested", "reason"):
+                    e.pop(key, None)
+            if not isinstance(e.get("reason"), str):
+                e["reason"] = "" if e.get("reason") is None else str(e["reason"])
+            if not isinstance(e.get("original"), str):
+                e["original"] = "" if e.get("original") is None else str(e["original"])
+            if not isinstance(e.get("suggested"), str):
+                e["suggested"] = "" if e.get("suggested") is None else str(e["suggested"])
+    return data
+
+
+def refine_text_via_llm(
+    *, lang: str, text: str,
+    primary: str | None = None,
+    secondary: str | None = None,
+) -> dict:
+    """Ask the LLM to correct and rewrite a sentence or short paragraph
+    in ``lang``. Returns the parsed dict matching :data:`REFINE_SCHEMA`:
+    ``{corrected, native, edits, explanation, explanation_primary?,
+    explanation_secondary?}``. The same explanation-language rules used
+    elsewhere apply (see :data:`_should_generate_primary` and friends).
+
+    Raises :class:`LLMError` on network or schema failures.
+    """
+    if not isinstance(text, str) or not text.strip():
+        raise ValueError("text required")
+    text = text.strip()
+    if len(text) > 4000:
+        text = text[:4000]
+    keep_primary = _should_generate_primary(lang, primary)
+    keep_secondary = _should_generate_secondary(primary, secondary)
+    target_name = _lang_name(lang)
+    primary_name = _lang_name(primary) if primary else ""
+    secondary_name = _lang_name(secondary) if secondary else ""
+
+    script_note = ""
+    if "zh" in (lang, primary, secondary):
+        script_note = " For Chinese content, use Traditional Chinese characters."
+
+    system = (
+        "You are a careful language tutor. Correct the user's text, "
+        "offer a more idiomatic rewrite, and explain the changes. "
+        "Return ONLY a JSON object matching the schema. No prose, "
+        "no code fences."
+        + script_note
+    )
+    user = _build_refine_user_prompt(
+        lang=lang, text=text,
+        target_name=target_name,
+        primary_name=primary_name,
+        secondary_name=secondary_name,
+        keep_primary=keep_primary,
+        keep_secondary=keep_secondary,
+    )
+    data = complete_json(
+        schema=REFINE_SCHEMA,
+        schema_name="refine_text",
+        system=system,
+        user=user,
+        temperature=0.2,
+        max_retries=0,
+        normalize=_normalize_refine,
+        timeout=REFINE_TIMEOUT_SECONDS,
+    )
+    # Post-process the same way the seed/fill/analyze paths do.
+    apply_explanation_rules(
+        data, lang=lang, primary=primary, secondary=secondary,
+    )
+    return data
+
+
 #
 # "Apply explanations" is the per-language translation pass: load
 # existing target-language structures and phrases, ask the LLM to fill
