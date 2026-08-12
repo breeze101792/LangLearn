@@ -22,6 +22,7 @@ export function renderSettings(host) {
   const state = store.get();
   const settings = state.settings || {};
   const languages = state.languages || [];
+  const selectableLanguages = languages.filter((l) => l.seeded || l.code === settings.active_language);
   // Fetch TTS provider metadata once when the page mounts. We don't block
   // initial render on it; the section will repopulate as soon as it lands.
   loadTtsProviders().then(() => {
@@ -147,7 +148,7 @@ export function renderSettings(host) {
           <div class="settings__row">
             <div class="settings__row__label">Active language</div>
             <select id="active-lang" class="select" style="max-width: 240px">
-              ${languages.map((l) => `<option value="${l.code}" ${l.code === s.active_language ? "selected" : ""}>${escapeHtml(l.display_name)} (${l.code})</option>`).join("")}
+              ${selectableLanguages.map((l) => `<option value="${l.code}" ${l.code === s.active_language ? "selected" : ""}>${escapeHtml(l.display_name)} (${l.code})</option>`).join("")}
             </select>
           </div>
         </div>
@@ -216,7 +217,7 @@ export function renderSettings(host) {
       <div class="settings__section">
         <h2 class="card__title">Dictionary chain</h2>
         <p class="field__hint">For each language, providers are tried top-to-bottom. The first that returns a result wins.</p>
-        ${languages.map((l) => {
+        ${selectableLanguages.map((l) => {
           const entries = chain[l.code] || [];
           return `
             <div class="chain__lang" data-lang="${escapeHtml(l.code)}">
