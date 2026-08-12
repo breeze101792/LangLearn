@@ -70,7 +70,6 @@ def import_preview():
     """Parse an uploaded file (multipart or raw body) into a merge preview."""
     raw_text, filename, content_type = _read_upload(request)
     table = _read_table_arg(request)
-    fmt = _read_format_arg(request, content_type=content_type, filename=filename)
     default_lang = request.args.get("default_lang") or (
         request.form.get("default_lang") if request.form else None
     )
@@ -79,6 +78,8 @@ def import_preview():
         has_header_raw = request.form.get("has_header")
     has_header = True if has_header_raw is None else _truthy(has_header_raw)
     try:
+        fmt = _read_format_arg(request, content_type=content_type,
+                               filename=filename)
         mapping = _read_mapping_arg(request)
     except ValueError as e:
         return jsonify(err(str(e), code="invalid_input")), 400

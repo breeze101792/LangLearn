@@ -13,11 +13,12 @@ import pytest
 
 
 @pytest.fixture
-def fresh(monkeypatch, tmp_path):
-    monkeypatch.setenv("LANGLEARN_DATA_DIR", str(tmp_path))
-    from backend import db
-    db.init_schema()
-    return tmp_path
+def fresh(clean_state):
+    """Re-export of the autouse clean_state fixture for tests that
+    read `fresh` for documentation purposes. The autouse fixture in
+    conftest.py already sets up the data dir + db schema and clears
+    module-level state — see `tests/conftest.py`."""
+    return clean_state
 
 
 def _mp3_bytes() -> bytes:

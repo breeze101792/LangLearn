@@ -6,7 +6,10 @@ Instructions for AI agents working in this repo. Pair with `~/projects/notebook/
 
 - **Working dir:** `/mnt/projects/webapp/langlearn`
 - **Run:** `./start.sh` (boots Flask on `PORT`, default 5056).
-- **Run tests:** `.venv_archlinux/bin/python -m pytest`
+- **Run tests:** `.venv_$(hostname)/bin/python -m pytest`
+  (start.sh provisions this venv at `.venv_<hostname>` from
+  `backend/requirements.txt`). On this host that's
+  `.venv_nixlab/bin/python`.
 - **Lint:** none configured; Python is read for type discipline only.
 
 ## Architecture
