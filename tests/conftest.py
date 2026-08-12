@@ -8,6 +8,16 @@ from __future__ import annotations
 
 import pytest
 
+# Force ``backend.config`` to import *now* (before any test fixture runs)
+# so ``config.load_dotenv()`` fires exactly once with the developer's
+# process-wide env. Once that initial load is done, ``clean_state`` can
+# safely ``monkeypatch.delenv`` ``LANGLEARN_PASSWORD`` without the next
+# ``from backend import config`` (which many test modules trigger as
+# their first statement) re-running ``load_dotenv`` and clobbering the
+# cleared value. ``config.py`` also guards against re-loads via an
+# attribute on the ``load_dotenv`` callable.
+from backend import config as _config  # noqa: F401  (side-effect import)
+
 
 @pytest.fixture(autouse=True)
 def clean_state(monkeypatch, tmp_path):

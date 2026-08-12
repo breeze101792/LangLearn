@@ -13,7 +13,14 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-load_dotenv(PROJECT_ROOT / ".env", override=False)
+# ``load_dotenv`` is idempotent — without this guard, the second import of
+# ``config`` (e.g. inside a test, when ``auth_gate`` first pulls config in)
+# would re-read ``.env`` and re-inject values that ``monkeypatch.delenv``
+# already cleared. Use a module-level flag (not an env var, since the test
+# fixture clears env vars) so the file is loaded exactly once per process.
+if not getattr(load_dotenv, "_langlearn_loaded", False):
+    load_dotenv(PROJECT_ROOT / ".env", override=False)
+    load_dotenv._langlearn_loaded = True  # type: ignore[attr-defined]
 
 
 def _data_dir() -> Path:
