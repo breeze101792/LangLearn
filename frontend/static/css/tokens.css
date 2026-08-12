@@ -43,9 +43,10 @@
   --dur-1: 120ms; --dur-2: 180ms;
   --ease: cubic-bezier(0.2, 0, 0, 1);
 
-  --content-max: 880px;
-  --content-narrow: 640px;
-  --nav-max: 1080px;
+  --content-max: 1200px;
+  --content-narrow: 720px;
+  --content-min: 640px;
+  --content-narrow-min: 480px;
 }
 
 [data-theme="dark"] {

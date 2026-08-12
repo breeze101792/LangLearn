@@ -45,8 +45,11 @@ code, pre, kbd, samp { font-family: var(--font-mono); }
 }
 
 /* Layout primitives */
-.container { max-width: var(--content-max); margin: 0 auto; padding: var(--sp-6) var(--sp-4); }
-.container--narrow { max-width: var(--content-narrow); margin: 0 auto; padding: var(--sp-6) var(--sp-4); }
+.container { width: 90%; max-width: var(--content-max); min-width: var(--content-min); margin: 0 auto; padding: var(--sp-6) var(--sp-4); }
+.container--narrow { width: 80%; max-width: var(--content-narrow); min-width: var(--content-narrow-min); margin: 0 auto; padding: var(--sp-6) var(--sp-4); }
+@media (max-width: 640px) {
+  .container, .container--narrow { width: 100%; min-width: 0; padding: var(--sp-4) var(--sp-3); }
+}
 
 /* Top nav */
 .nav {
