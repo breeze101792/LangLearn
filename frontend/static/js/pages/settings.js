@@ -4,6 +4,7 @@ import { api } from "../api.js";
 import { store } from "../state.js";
 import { toast } from "../components/toast.js";
 import { renderLangSwitcher } from "../components/lang-switcher.js";
+import { renderTransfer } from "./transfer.js";
 
 let activeSection = "general";
 let dirty = {};
@@ -39,6 +40,7 @@ export function renderSettings(host) {
         <button class="settings__nav-item settings__nav-item--active" data-section="general">General</button>
         <button class="settings__nav-item" data-section="dict-chain">Dictionary chain</button>
         <button class="settings__nav-item" data-section="init">Initialize data</button>
+        <button class="settings__nav-item" data-section="backup">Backup &amp; restore</button>
       </nav>
       <div id="settings-main" class="settings__main"></div>
     </section>
@@ -57,11 +59,18 @@ export function renderSettings(host) {
     const main = host.querySelector("#settings-main");
     if (activeSection === "general") renderGeneral(main);
     else if (activeSection === "dict-chain") renderDictChain(main);
+    else if (activeSection === "backup") renderTransfer(main);
     else renderInit(main);
     renderActions();
   }
 
   function renderActions() {
+    // The backup section owns its own actions; skip the global save bar.
+    if (activeSection === "backup") {
+      const bar = host.querySelector("#settings-actions");
+      if (bar) bar.innerHTML = "";
+      return;
+    }
     const bar = host.querySelector("#settings-actions");
     const isDirty = Object.keys(dirty).length > 0;
     if (!isDirty) {

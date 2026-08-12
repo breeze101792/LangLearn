@@ -88,7 +88,6 @@ Flask app factory (`backend/app.py`) + blueprints by resource + services for bus
 ## Things explicitly NOT in v1
 
 - User login / multi-user (tables ready, no auth UI).
-- Export / import.
 - Audio / TTS.
 - Notifications / reminders.
 - Mobile packaging.

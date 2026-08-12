@@ -169,7 +169,6 @@ design artifacts. The webapp rule we follow is
 ## Out of scope for v1
 
 - User accounts / login (tables ready, UI not).
-- Export / import.
 - Audio pronunciation.
 - PWA install flow (manifest is placeholder only).
 - Mobile app.

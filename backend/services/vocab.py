@@ -28,6 +28,9 @@ def add_vocab(*, user_id: int, language: str, word: str, source: str,
               glossary: str = "", example: str | None = None,
               explanation_primary: str | None = None,
               explanation_secondary: str | None = None,
+              leitner_box: int | None = None,
+              next_due: str | None = None,
+              added_at: str | None = None,
               auto_add: bool = True) -> dict:
     if not is_valid_lang(language):
         raise ValueError("invalid language")
@@ -54,6 +57,21 @@ def add_vocab(*, user_id: int, language: str, word: str, source: str,
     if explanation_secondary is not None:
         explanation_secondary = explanation_secondary.strip()[:1000] or None
     sense_idx = max(0, int(sense_idx))
+    # leitner_box/next_due/added_at are only used on insert (imports carry
+    # history). On update they are intentionally preserved — re-looking-up a
+    # word must not reset the user's spaced-repetition schedule.
+    # The default for insert_due preserves the original ``datetime('now')``
+    # behaviour so freshly added rows are reviewable immediately. Imports
+    # that supply a custom box without next_due get a box-based cadence.
+    insert_box = 1 if leitner_box is None else _clamp_leitner(leitner_box)
+    explicit_schedule = leitner_box is not None or next_due is not None
+    if next_due is not None:
+        insert_due = str(next_due).strip()[:32] or None
+    elif explicit_schedule:
+        insert_due = leitner.due_iso(insert_box)
+    else:
+        insert_due = None  # signals "use SQLite datetime('now')" below
+    insert_added = str(added_at).strip()[:32] if added_at is not None else None
     with transaction() as conn:
         existing = conn.execute(
             "SELECT id FROM vocab_items WHERE user_id=? AND language=? AND word=?",
@@ -68,18 +86,45 @@ def add_vocab(*, user_id: int, language: str, word: str, source: str,
                  explanation_secondary, existing["id"], user_id),
             )
             return {"id": existing["id"], "created": False, "language": language, "word": word}
-        cur = conn.execute(
-            "INSERT INTO vocab_items ("
-            "  user_id, language, word, source, sense_idx, pos, glossary, example,"
-            "  explanation_primary, explanation_secondary, leitner_box, next_due"
-            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, datetime('now'))",
-            (
-                user_id, language, word, source, sense_idx, pos, glossary, example,
-                explanation_primary, explanation_secondary,
-            ),
-        )
+        if insert_due is None:
+            cur = conn.execute(
+                "INSERT INTO vocab_items ("
+                "  user_id, language, word, source, sense_idx, pos, glossary, example,"
+                "  explanation_primary, explanation_secondary, leitner_box, next_due"
+                + (", added_at" if insert_added is not None else "")
+                + ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now')"
+                + (", ?" if insert_added is not None else "")
+                + ")",
+                (
+                    user_id, language, word, source, sense_idx, pos, glossary, example,
+                    explanation_primary, explanation_secondary, insert_box,
+                ) + ((insert_added,) if insert_added is not None else ()),
+            )
+        else:
+            cur = conn.execute(
+                "INSERT INTO vocab_items ("
+                "  user_id, language, word, source, sense_idx, pos, glossary, example,"
+                "  explanation_primary, explanation_secondary, leitner_box, next_due"
+                + (", added_at" if insert_added is not None else "")
+                + ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?"
+                + (", ?" if insert_added is not None else "")
+                + ")",
+                (
+                    user_id, language, word, source, sense_idx, pos, glossary, example,
+                    explanation_primary, explanation_secondary, insert_box, insert_due,
+                ) + ((insert_added,) if insert_added is not None else ()),
+            )
         vocab_id = cur.lastrowid
     return {"id": vocab_id, "created": True, "language": language, "word": word}
+
+
+def _clamp_leitner(value: Any) -> int:
+    from . import leitner
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        return 1
+    return max(leitner.MIN_BOX, min(leitner.MAX_BOX, n))
 
 
 def delete_vocab(*, user_id: int, vocab_id: int) -> dict:
