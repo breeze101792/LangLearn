@@ -35,9 +35,15 @@ export function renderDictionary(host) {
   lastLang = lang;
 
   host.innerHTML = `
-    <header class="page-head">
-      <h1 class="page-head__title">Dictionary</h1>
-      <p class="page-head__subtitle">Look up a word in your active language.</p>
+    <header class="page-head page-head--row">
+      <div>
+        <h1 class="page-head__title">Dictionary</h1>
+        <p class="page-head__subtitle">Look up a word in your active language.</p>
+      </div>
+      <button id="dict-lookup-btn" class="btn btn--primary" type="button"
+              title="Look up the word in the search box, or paste from your clipboard">
+        Look up word
+      </button>
     </header>
     <section class="card">
       <div class="autocomplete">
@@ -61,10 +67,33 @@ export function renderDictionary(host) {
 
   const input = host.querySelector("#dict-search");
   const btn = host.querySelector("#dict-search-btn");
+  const lookupBtn = host.querySelector("#dict-lookup-btn");
   const result = host.querySelector("#dict-result");
   const suggestEl = host.querySelector("#dict-suggest");
 
   btn.addEventListener("click", () => doLookup(canonical(input.value), lang));
+  // The page-head "Look up word" button reuses the same flow. If the
+  // search box already has text we look that up; otherwise we read the
+  // clipboard and look up the first word-like token we find. This makes
+  // the right-click "Copy" → page-head "Look up" handoff one click.
+  lookupBtn.addEventListener("click", async () => {
+    let word = canonical(input.value);
+    if (!word) {
+      word = canonical(await readClipboardWord());
+      if (word) {
+        input.value = word.replace(/_/g, " ");
+        hideSuggest(suggestEl);
+      }
+    }
+    if (!word) {
+      input.focus();
+      toast({ title: "Type or paste a word first",
+              message: "The search box is empty and your clipboard has no readable text.",
+              variant: "info", ttl: 2400 });
+      return;
+    }
+    doLookup(word, lang);
+  });
   input.addEventListener("keydown", (e) => {
     if (e.key === "ArrowDown") {
       if (moveSuggestSelection(suggestEl, 1)) e.preventDefault();
@@ -691,4 +720,35 @@ function isTyping(el) {
   if (!el) return false;
   const tag = el.tagName;
   return tag === "INPUT" || tag === "TEXTAREA" || el.isContentEditable;
+}
+
+// Read a single word-like token from the clipboard. We don't want to
+// feed a multi-line paragraph into the dictionary search, so we grab
+// the first token that looks like a word (Unicode letters / digits).
+async function readClipboardWord() {
+  let text = "";
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      text = await navigator.clipboard.readText();
+    } else {
+      // Legacy fallback for plain-http LAN setups. The hidden textarea
+      // path is a one-shot execCommand("paste"); the browser may refuse
+      // silently, in which case we fall back to "" and let the caller
+      // surface a friendly toast.
+      const ta = document.createElement("textarea");
+      ta.setAttribute("readonly", "");
+      ta.style.position = "fixed";
+      ta.style.top = "-1000px";
+      ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.focus();
+      try { text = document.execCommand("paste") ? ta.value : ""; }
+      catch (e) { text = ""; }
+      ta.remove();
+    }
+  } catch (e) {
+    return "";
+  }
+  const match = String(text || "").match(/[\p{L}\p{N}][\p{L}\p{N}'\-\.]*/u);
+  return match ? match[0] : "";
 }
