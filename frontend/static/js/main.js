@@ -39,7 +39,7 @@ async function boot() {
 }
 
 function bindLogout() {
-  const nav = document.querySelector(".nav__inner");
+  const nav = document.querySelector(".nav__right");
   if (!nav) return;
   if (document.getElementById("logout-btn")) return;
   const btn = document.createElement("button");

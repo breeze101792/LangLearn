@@ -56,13 +56,13 @@ code, pre, kbd, samp { font-family: var(--font-mono); }
   backdrop-filter: blur(8px);
 }
 .nav__inner {
-  max-width: var(--nav-max); margin: 0 auto;
   padding: var(--sp-3) var(--sp-4);
   display: flex; align-items: center; gap: var(--sp-4);
   flex-wrap: wrap;
 }
 .nav__brand { font-weight: 600; font-size: 17px; color: var(--text-primary); margin-right: auto; }
 .nav__brand:hover { text-decoration: none; }
+.nav__right { display: flex; align-items: center; gap: var(--sp-3); flex-wrap: wrap; }
 .nav__links { display: flex; gap: var(--sp-1); flex-wrap: wrap; }
 .nav__link {
   padding: var(--sp-2) var(--sp-3);
