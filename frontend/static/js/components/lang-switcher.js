@@ -12,7 +12,7 @@ export function renderLangSwitcher() {
   host.innerHTML = "";
   const s = store.get();
   const active = s.activeLanguage || (s.settings && s.settings.active_language) || "en";
-  const languages = s.languages || [];
+  const languages = (s.languages || []).filter((l) => l.seeded || l.code === active);
   if (!languages.length) return;
 
   const wrap = document.createElement("div");

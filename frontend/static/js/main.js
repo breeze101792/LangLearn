@@ -3,6 +3,7 @@
 import { api, setUnauthorizedHandler } from "./api.js";
 import { store } from "./state.js";
 import { renderNavLinks } from "./components/nav-links.js";
+import { renderNavDrawer } from "./components/nav-drawer.js";
 import { renderLangSwitcher } from "./components/lang-switcher.js";
 import { bindContextMenu } from "./components/context-menu.js";
 
@@ -23,11 +24,13 @@ async function boot() {
 
   await loadInitial();
   renderNavLinks(currentHash());
+  renderNavDrawer(currentHash());
   renderLangSwitcher();
   route();
 
   window.addEventListener("hashchange", () => {
     renderNavLinks(currentHash());
+    renderNavDrawer(currentHash());
     route();
   });
 

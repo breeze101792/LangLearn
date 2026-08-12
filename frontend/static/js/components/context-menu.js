@@ -6,13 +6,18 @@
 //   - Paste: pastes the clipboard into the most recently focused editable
 //     element (input / textarea / contenteditable). Falls back to
 //     document.execCommand('paste') when no editable target is known.
-//   - Lookup "<word>": asks the popup dictionary to fetch the word.
+//   - Lookup "<word>": opens the floating dictionary popup.
+//   - Look up "<word>" in Dictionary: navigates to the Dictionary page
+//     with the word pre-filled in the search box. Pairs with right-click
+//     Copy to give a one-step "select a word anywhere → open Dictionary
+//     → look up" flow.
 //
 // The menu suppresses the native contextmenu only when we have something
 // meaningful to act on; inside editable controls we let the browser's
 // menu through untouched.
 
 import { openDictPopup } from "./dict-popup.js";
+import { store } from "../state.js";
 
 let menuEl = null;
 
@@ -141,6 +146,32 @@ function show(x, y, word, hasSelection) {
     openDictPopup({ word: target });
   });
   menuEl.appendChild(lookupBtn);
+
+// Look up "<word>" in Dictionary: navigate to the Dictionary page with
+// the search box pre-filled. The page consumes `pendingDictionaryWord`
+// on mount and then clears it, so this stays a clean handoff even if
+// the user never lands on the page.
+  const lookupPageBtn = document.createElement("button");
+  lookupPageBtn.type = "button";
+  lookupPageBtn.className = "ctx-menu__item";
+  lookupPageBtn.setAttribute("role", "menuitem");
+  lookupPageBtn.textContent = `Look up "${truncate(word, 24)}" in Dictionary`;
+  lookupPageBtn.addEventListener("click", () => {
+    const target = word;
+    hide();
+    // Set the pending word FIRST so the dictionary page can read it
+    // when its renderDictionary() runs in response to the hashchange.
+    store.set({ pendingDictionaryWord: target });
+    if (window.location.hash !== "#/dictionary") {
+      window.location.hash = "#/dictionary";
+    } else {
+      // Already on the Dictionary page — the hashchange handler won't
+      // re-run, so dispatch a manual event to force a re-render. The
+      // page reads the pending word on every mount, so this works.
+      window.dispatchEvent(new HashChangeEvent("hashchange"));
+    }
+  });
+  menuEl.appendChild(lookupPageBtn);
 
   document.body.appendChild(menuEl);
   // Clamp to viewport so the menu never renders off-screen.

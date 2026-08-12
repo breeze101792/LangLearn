@@ -88,17 +88,85 @@ code, pre, kbd, samp { font-family: var(--font-mono); }
 }
 .nav__icon-btn:hover { background: var(--surface-sunken); color: var(--text-primary); }
 
+/* Mobile drawer trigger — hidden on desktop, shown ≤640px */
+.nav__menu-btn { display: none; font-size: 18px; line-height: 1; }
+
+/* Mobile drawer */
+.nav-drawer-backdrop {
+  position: fixed; inset: 0; z-index: 70;
+  background: rgba(0, 0, 0, 0.45);
+  animation: nav-drawer-fade var(--dur-2) var(--ease);
+}
+.nav-drawer-backdrop[hidden] { display: none; }
+.nav-drawer {
+  position: fixed;
+  top: 0; left: 0; bottom: 0;
+  z-index: 71;
+  width: min(280px, 80vw);
+  background: var(--surface-raised);
+  border-right: 1px solid var(--border);
+  box-shadow: var(--shadow-2);
+  display: flex; flex-direction: column;
+  animation: nav-drawer-slide var(--dur-2) var(--ease);
+}
+.nav-drawer[hidden] { display: none; }
+.nav-drawer__head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: var(--sp-3) var(--sp-4);
+  border-bottom: 1px solid var(--border);
+}
+.nav-drawer__title {
+  font-size: 13px; font-weight: 600;
+  color: var(--text-secondary);
+  letter-spacing: 0.04em; text-transform: uppercase;
+}
+.nav-drawer__links {
+  display: flex; flex-direction: column;
+  padding: var(--sp-2) 0;
+  overflow-y: auto;
+}
+.nav-drawer__link {
+  padding: var(--sp-3) var(--sp-4);
+  color: var(--text-secondary);
+  font-size: 15px;
+  border-left: 3px solid transparent;
+}
+.nav-drawer__link:hover {
+  background: var(--surface-sunken);
+  color: var(--text-primary);
+  text-decoration: none;
+}
+.nav-drawer__link--active {
+  color: var(--accent-text);
+  background: var(--accent-soft);
+  border-left-color: var(--accent);
+  font-weight: 500;
+}
+@keyframes nav-drawer-slide {
+  from { transform: translateX(-100%); }
+  to   { transform: translateX(0); }
+}
+@keyframes nav-drawer-fade {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+/* Lock body scroll while drawer is open */
+body.nav-drawer-open { overflow: hidden; }
+
+/* Small devices: show hamburger, hide top-bar links, drop brand to stay
+   compact. Lang switcher + theme toggle stay visible in the top bar. */
+@media (max-width: 640px) {
+  .nav__menu-btn { display: inline-flex; }
+  .nav__links { display: none; }
+  .nav__brand { font-size: 15px; }
+  .nav__inner { gap: var(--sp-3); padding: var(--sp-2) var(--sp-3); }
+  .nav__right { gap: var(--sp-2); }
+}
+
 /* Page header */
 .page-head { padding: var(--sp-6) 0 var(--sp-4); }
 .page-head__title { font-size: 22px; line-height: 1.3; font-weight: 600; margin: 0; }
 .page-head__subtitle { color: var(--text-secondary); margin: var(--sp-1) 0 0; }
-.page-head--row {
-  display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: var(--sp-4);
-  flex-wrap: wrap;
-}
 
 /* Buttons */
 .btn {

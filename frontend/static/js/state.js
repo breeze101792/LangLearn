@@ -5,6 +5,10 @@ const state = {
   languages: [],
   activeLanguage: null,
   initialized: false,
+  // Set by the right-click "Look up word" item so the Dictionary page
+  // can pre-fill the search input on its next mount. The Dictionary
+  // page clears it after consuming.
+  pendingDictionaryWord: null,
 };
 
 const subs = new Set();
