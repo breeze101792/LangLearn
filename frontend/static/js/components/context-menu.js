@@ -1,9 +1,16 @@
 // Global right-click context menu for selected text.
 //
-// Currently exposes a single "Lookup" item that asks the popup dictionary to
-// fetch the selected word. The menu suppresses the native contextmenu only
-// when we have something meaningful to act on; inside editable controls we
-// let the browser's menu through untouched.
+// Items:
+//   - Copy: copies the current selection (or, if the user right-clicked
+//     on a word with no selection, copies that word).
+//   - Paste: pastes the clipboard into the most recently focused editable
+//     element (input / textarea / contenteditable). Falls back to
+//     document.execCommand('paste') when no editable target is known.
+//   - Lookup "<word>": asks the popup dictionary to fetch the word.
+//
+// The menu suppresses the native contextmenu only when we have something
+// meaningful to act on; inside editable controls we let the browser's
+// menu through untouched.
 
 import { openDictPopup } from "./dict-popup.js";
 
@@ -80,26 +87,61 @@ function onContextMenu(e) {
     return;
   }
   e.preventDefault();
-  show(e.clientX, e.clientY, word);
+  show(e.clientX, e.clientY, word, !!selected);
 }
 
-function show(x, y, word) {
+function show(x, y, word, hasSelection) {
   hide();
   menuEl = document.createElement("div");
   menuEl.id = MENU_ID;
   menuEl.className = "ctx-menu";
   menuEl.setAttribute("role", "menu");
-  const btn = document.createElement("button");
-  btn.type = "button";
-  btn.className = "ctx-menu__item";
-  btn.setAttribute("role", "menuitem");
-  btn.textContent = `Lookup "${truncate(word, 24)}"`;
-  btn.addEventListener("click", () => {
+
+  // Copy: copies the current selection. When the user right-clicked a
+  // bare word, we still offer Copy so they get a one-click copy of the
+  // word — but the button shows a subtle hint when nothing was selected.
+  const copyBtn = document.createElement("button");
+  copyBtn.type = "button";
+  copyBtn.className = "ctx-menu__item";
+  copyBtn.setAttribute("role", "menuitem");
+  copyBtn.textContent = hasSelection ? "Copy" : `Copy "${truncate(word, 24)}"`;
+  copyBtn.addEventListener("click", () => {
+    const target = hasSelection ? getSelectionText() : word;
+    hide();
+    copyToClipboard(target);
+  });
+  menuEl.appendChild(copyBtn);
+
+  // Paste: paste the clipboard into the most recently focused editable
+  // element. Always offered (never disabled) — the function below is a
+  // no-op when nothing editable is focused.
+  const pasteBtn = document.createElement("button");
+  pasteBtn.type = "button";
+  pasteBtn.className = "ctx-menu__item";
+  pasteBtn.setAttribute("role", "menuitem");
+  pasteBtn.textContent = "Paste";
+  pasteBtn.addEventListener("click", async () => {
+    hide();
+    await pasteFromClipboard();
+  });
+  menuEl.appendChild(pasteBtn);
+
+  // Divider between clipboard actions and the lookup action.
+  menuEl.appendChild(makeDivider());
+
+  // Lookup "<word>": popup dictionary.
+  const lookupBtn = document.createElement("button");
+  lookupBtn.type = "button";
+  lookupBtn.className = "ctx-menu__item";
+  lookupBtn.setAttribute("role", "menuitem");
+  lookupBtn.textContent = `Lookup "${truncate(word, 24)}"`;
+  lookupBtn.addEventListener("click", () => {
     const target = word;
     hide();
     openDictPopup({ word: target });
   });
-  menuEl.appendChild(btn);
+  menuEl.appendChild(lookupBtn);
+
   document.body.appendChild(menuEl);
   // Clamp to viewport so the menu never renders off-screen.
   const rect = menuEl.getBoundingClientRect();
@@ -111,6 +153,121 @@ function show(x, y, word) {
   if (top + rect.height > vh) top = Math.max(4, vh - rect.height - 4);
   menuEl.style.left = `${left}px`;
   menuEl.style.top = `${top}px`;
+}
+
+function makeDivider() {
+  const sep = document.createElement("div");
+  sep.className = "ctx-menu__sep";
+  sep.setAttribute("role", "separator");
+  return sep;
+}
+
+async function copyToClipboard(text) {
+  if (!text) return;
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(text);
+      return;
+    }
+  } catch (e) {
+    // Fall through to execCommand fallback.
+  }
+  // Fallback for non-secure contexts (e.g. plain-http LAN). Hidden
+  // textarea + execCommand keeps the legacy path alive.
+  const ta = document.createElement("textarea");
+  ta.value = text;
+  ta.setAttribute("readonly", "");
+  ta.style.position = "fixed";
+  ta.style.top = "-1000px";
+  ta.style.opacity = "0";
+  document.body.appendChild(ta);
+  ta.select();
+  try { document.execCommand("copy"); } catch (e) { /* no-op */ }
+  ta.remove();
+}
+
+async function pasteFromClipboard() {
+  // Find the most recently focused editable element so the paste lands
+  // somewhere useful — usually the search box or last text input the
+  // user touched. If we don't know one, fall back to whatever the
+  // browser considers the active element, or no-op.
+  const target = lastEditable() || (isEditable(document.activeElement)
+    ? document.activeElement : null);
+  let text = "";
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      text = await navigator.clipboard.readText();
+    } else {
+      text = await readClipboardLegacy();
+    }
+  } catch (e) {
+    return;
+  }
+  if (!text) return;
+  if (target && !target.readOnly && !target.disabled) {
+    insertIntoEditable(target, text);
+  } else {
+    // No editable target: at least leave the text on the system
+    // clipboard so a subsequent paste into the search box still works.
+    // (We already have it; nothing more to do.)
+  }
+}
+
+function lastEditable() {
+  if (!lastEditable._el || !document.body.contains(lastEditable._el)) return null;
+  return lastEditable._el;
+}
+// Track the last focused editable so we can paste into it later. Bound
+// here rather than inside onContextMenu to keep the side-effect scope
+// small.
+function trackLastEditable(e) {
+  if (isEditable(e.target)) lastEditable._el = e.target;
+}
+if (typeof document !== "undefined") {
+  document.addEventListener("focusin", trackLastEditable, true);
+}
+
+function insertIntoEditable(el, text) {
+  if (typeof el.setRangeText === "function") {
+    // input / textarea
+    const start = el.selectionStart || 0;
+    const end = el.selectionEnd || 0;
+    el.setRangeText(text, start, end, "end");
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+    el.focus();
+    return;
+  }
+  if (el.isContentEditable) {
+    // contenteditable: insert at the current selection / caret.
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0) {
+      el.appendChild(document.createTextNode(text));
+    } else {
+      const range = sel.getRangeAt(0);
+      range.deleteContents();
+      range.insertNode(document.createTextNode(text));
+      range.collapse(false);
+    }
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+    el.focus();
+  }
+}
+
+function readClipboardLegacy() {
+  return new Promise((resolve) => {
+    const ta = document.createElement("textarea");
+    ta.setAttribute("readonly", "");
+    ta.style.position = "fixed";
+    ta.style.top = "-1000px";
+    ta.style.opacity = "0";
+    document.body.appendChild(ta);
+    ta.focus();
+    let text = "";
+    try { text = document.execCommand("paste") ? ta.value : ""; }
+    catch (e) { text = ""; }
+    ta.remove();
+    resolve(text);
+  });
 }
 
 function hide() {

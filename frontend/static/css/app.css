@@ -728,6 +728,11 @@ code, pre, kbd, samp { font-family: var(--font-mono); }
   color: var(--accent-text);
   outline: none;
 }
+.ctx-menu__sep {
+  height: 1px;
+  background: var(--border);
+  margin: var(--sp-1) var(--sp-2);
+}
 
 /* Floating dictionary popup */
 .dict-popup {
