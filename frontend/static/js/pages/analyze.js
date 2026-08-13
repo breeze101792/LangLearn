@@ -9,6 +9,7 @@
 import { api } from "../api.js";
 import { store } from "../state.js";
 import { toast } from "../components/toast.js";
+import { consumeRestoredState } from "../components/page-state.js";
 
 export function renderAnalyze(host) {
   const state = store.get();
@@ -16,6 +17,7 @@ export function renderAnalyze(host) {
   const primary = (state.settings && state.settings.explanation_primary) || null;
   const secondary = (state.settings && state.settings.explanation_secondary) || null;
   const languages = state.languages || [];
+  const restored = consumeRestoredState();
 
   let lastResult = null;
 
@@ -52,6 +54,18 @@ export function renderAnalyze(host) {
     }
   });
   btn.addEventListener("click", runAnalyze);
+
+  // Restore the user's text and the previous analysis result so a
+  // quick detour doesn't lose work in progress.
+  if (restored && typeof restored === "object") {
+    if (typeof restored.text === "string") {
+      textarea.value = restored.text;
+    }
+    if (restored.lastResult && typeof restored.lastResult === "object") {
+      lastResult = restored.lastResult;
+      renderResult(result, lastResult);
+    }
+  }
 
   async function runAnalyze() {
     const text = textarea.value.trim();
@@ -269,4 +283,15 @@ function escapeHtml(s) {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
+}
+
+// Persist the textarea contents and the last analysis result so a
+// quick detour to another page doesn't lose work. The router calls
+// this on every hash change; without saving, navigating back would
+// re-render a blank page.
+export function saveState() {
+  const textarea = document.getElementById("analyze-text");
+  const text = textarea ? textarea.value : "";
+  if (!text && !lastResult) return null;
+  return { text, lastResult };
 }

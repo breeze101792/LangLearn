@@ -9,6 +9,7 @@
 import { api } from "../api.js";
 import { store } from "../state.js";
 import { toast } from "../components/toast.js";
+import { consumeRestoredState } from "../components/page-state.js";
 
 const BOX_LABELS = {
   1: "Box 1 (new)",
@@ -22,6 +23,7 @@ export function renderVocabulary(host) {
   const state = store.get();
   const lang = (state.settings && state.settings.active_language) || "en";
   const pageSize = (state.settings && state.settings.page_size) || 20;
+  const restored = consumeRestoredState();
 
   host.innerHTML = `
     <header class="page-head">
@@ -44,6 +46,26 @@ export function renderVocabulary(host) {
 
   let activeBox = "";
   let offset = 0;
+
+  // Restore the saved filter and pagination so the user lands on the
+  // same view they left.
+  if (restored && typeof restored === "object") {
+    if (typeof restored.activeBox === "string" || typeof restored.activeBox === "number") {
+      activeBox = String(restored.activeBox);
+    }
+    if (Number.isFinite(restored.offset) && restored.offset >= 0) {
+      offset = restored.offset;
+    }
+    // Reflect the restored filter on the segmented control so the
+    // highlighted tab matches the loaded list.
+    if (activeBox) {
+      segments.querySelectorAll("button.segmented__item").forEach((b) => {
+        const on = (b.dataset.box || "") === activeBox;
+        b.classList.toggle("is-active", on);
+        b.setAttribute("aria-selected", on ? "true" : "false");
+      });
+    }
+  }
 
   segments.addEventListener("click", (e) => {
     const btn = e.target.closest("button.segmented__item");
@@ -264,7 +286,29 @@ export function renderVocabulary(host) {
             return;
           }
           toast({ title: "Restored", variant: "success", ttl: 1500 });
-          load();
+  load();
+
+  // Expose the live state on the module so saveState() can read it
+  // without having to scrape the DOM. The router calls saveState()
+  // when the user navigates away.
+  moduleState.activeBox = () => activeBox;
+  moduleState.offset = () => offset;
+}
+
+// Module-level handles for the live state of the currently mounted
+// vocabulary view. Reset on each mount.
+const moduleState = { activeBox: null, offset: null };
+
+export function saveState() {
+  if (!moduleState.activeBox) return null;
+  const activeBox = moduleState.activeBox();
+  const offset = moduleState.offset ? moduleState.offset() : 0;
+  // The default view (all boxes, first page) is what a fresh mount
+  // shows. Don't bother persisting it — saves a sessionStorage write
+  // and keeps the storage clean.
+  if (!activeBox && !offset) return null;
+  return { activeBox, offset };
+}
         },
       }] : [],
     });

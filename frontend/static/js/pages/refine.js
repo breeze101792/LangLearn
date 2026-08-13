@@ -8,6 +8,7 @@
 import { api } from "../api.js";
 import { store } from "../state.js";
 import { toast } from "../components/toast.js";
+import { consumeRestoredState } from "../components/page-state.js";
 
 export function renderRefine(host) {
   const state = store.get();
@@ -15,6 +16,7 @@ export function renderRefine(host) {
   const primary = (state.settings && state.settings.explanation_primary) || null;
   const secondary = (state.settings && state.settings.explanation_secondary) || null;
   const languages = state.languages || [];
+  const restored = consumeRestoredState();
 
   host.innerHTML = `
     <header class="page-head">
@@ -49,6 +51,12 @@ export function renderRefine(host) {
     }
   });
   btn.addEventListener("click", runRefine);
+
+  // Restore the user's text. The refined output is not persisted
+  // — the user knows what they refined and can re-run if needed.
+  if (restored && typeof restored === "object" && typeof restored.text === "string") {
+    textarea.value = restored.text;
+  }
 
   async function runRefine() {
     const text = textarea.value.trim();
@@ -219,4 +227,13 @@ function escapeHtml(s) {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
+}
+
+// Persist the textarea contents. Only the text is worth saving; the
+// refined output is large and the user can re-run it cheaply.
+export function saveState() {
+  const textarea = document.getElementById("refine-text");
+  const text = textarea ? textarea.value : "";
+  if (!text) return null;
+  return { text };
 }

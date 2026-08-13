@@ -3,6 +3,7 @@
 import { api } from "../api.js";
 import { store } from "../state.js";
 import { toast } from "../components/toast.js";
+import { consumeRestoredState } from "../components/page-state.js";
 
 export function renderPhrases(host) {
   const state = store.get();
@@ -41,6 +42,7 @@ export function renderPhrases(host) {
       explanation_secondary: form.explanation_secondary,
       source: "user",
     }),
+    restored,
   });
 }
 
@@ -119,7 +121,7 @@ function escapeHtml(s) {
 }
 
 // shared generic list+add page
-function renderListPage({ host, title, kind, endpoint, fillEndpoint, emptyMsg, emptyActions, rowRenderer, fields, addBody }) {
+function renderListPage({ host, title, kind, endpoint, fillEndpoint, emptyMsg, emptyActions, rowRenderer, fields, addBody, restored }) {
   const state = store.get();
   const lang = (state.settings && state.settings.active_language) || "en";
   let viewFamiliar = false;
@@ -152,6 +154,33 @@ function renderListPage({ host, title, kind, endpoint, fillEndpoint, emptyMsg, e
       panel.style.display = "none";
     }
   });
+
+  // Restore the saved familiar filter and add-panel state so the user
+  // lands on the same view they left.
+  if (restored && typeof restored === "object") {
+    if (restored.viewFamiliar === true || restored.viewFamiliar === false) {
+      viewFamiliar = restored.viewFamiliar;
+      host.querySelectorAll("#familiar-segments .segmented__item").forEach((b) => {
+        const on = (b.dataset.familiar === "1") === viewFamiliar;
+        b.classList.toggle("is-active", on);
+        b.setAttribute("aria-selected", on ? "true" : "false");
+      });
+    }
+    if (restored.addOpen && restored.addDraft && typeof restored.addDraft === "object") {
+      const panel = document.getElementById("add-panel");
+      renderAddForm(panel, lang, fields, fillEndpoint, addBody, endpoint, async () => {
+        panel.style.display = "none";
+        await load();
+      });
+      fields.forEach((f) => {
+        if (Object.prototype.hasOwnProperty.call(restored.addDraft, f.key)) {
+          const ta = panel.querySelector(`#field-${f.key}`);
+          if (ta && typeof restored.addDraft[f.key] === "string") ta.value = restored.addDraft[f.key];
+        }
+      });
+      panel.style.display = "block";
+    }
+  }
 
   host.querySelector("#familiar-segments").addEventListener("click", (e) => {
     const btn = e.target.closest("button.segmented__item");
@@ -218,6 +247,34 @@ function renderListPage({ host, title, kind, endpoint, fillEndpoint, emptyMsg, e
     });
   }
   load();
+
+  // Expose the live state on the module so saveState() can read it
+  // when the user navigates away.
+  moduleState.viewFamiliar = () => viewFamiliar;
+  moduleState.addOpen = () => {
+    const panel = document.getElementById("add-panel");
+    return !!(panel && panel.style.display !== "none");
+  };
+  moduleState.addDraft = () => {
+    const panel = document.getElementById("add-panel");
+    if (!panel) return null;
+    const draft = {};
+    fields.forEach((f) => {
+      const ta = panel.querySelector(`#field-${f.key}`);
+      if (ta && ta.value) draft[f.key] = ta.value;
+    });
+    return draft;
+  };
+}
+
+const moduleState = { viewFamiliar: null, addOpen: null, addDraft: null };
+
+export function saveState() {
+  if (!moduleState.viewFamiliar) return null;
+  const viewFamiliar = moduleState.viewFamiliar();
+  const addOpen = moduleState.addOpen ? moduleState.addOpen() : false;
+  if (!viewFamiliar && !addOpen) return null;
+  return { viewFamiliar, addOpen, addDraft: addOpen ? (moduleState.addDraft() || {}) : null };
 }
 
 async function editRow(items, btn, endpoint, load) {

@@ -10,6 +10,7 @@ import { store } from "../state.js";
 import { toast } from "../components/toast.js";
 import { renderWordCard } from "../components/word-card.js";
 import { bindSpeakButtons } from "../components/speak.js";
+import { consumeRestoredState } from "../components/page-state.js";
 
 // Metadata fetched from /api/dictionary/providers keyed by name.
 let providerMeta = {};
@@ -17,7 +18,7 @@ let llmStatus = { configured: true, provider_kind: "openai-compat" };
 let providerMetaLoaded = false;
 let lastLang = null;
 
-const lastLookup = { word: "", lang: "" };
+const lastLookup = { word: "", lang: "", source: "" };
 // Monotonic token so a slow in-flight response can't clobber the result of a
 // newer lookup (e.g. an AI request for the previous word landing late).
 let lookupToken = 0;
@@ -26,6 +27,7 @@ export function renderDictionary(host) {
   const state = store.get();
   const settings = state.settings || {};
   const lang = settings.active_language || "en";
+  const restored = consumeRestoredState();
 
   if (lastLang !== null && lastLang !== lang) {
     // Language switched — drop metadata cache so we re-fetch with new lang.
@@ -118,6 +120,20 @@ export function renderDictionary(host) {
     if (word) {
       input.value = word.replace(/_/g, " ");
       doLookup(word, lang);
+    }
+  }
+
+  // Page-state restoration: bring back the search input and the last
+  // lookup so the user lands on the same view they left.
+  if (restored && typeof restored === "object") {
+    if (typeof restored.searchInput === "string") {
+      input.value = restored.searchInput;
+    }
+    if (restored.lastLookup && restored.lastLookup.word && restored.lastLookup.lang === lang) {
+      doLookup(restored.lastLookup.word, lang, restored.lastLookup.source || undefined);
+    } else if (restored.searchInput) {
+      // Only the input was preserved (no result). Nothing to do — the
+      // input is already restored.
     }
   }
 }
@@ -414,6 +430,7 @@ async function doLookup(word, lang, providerOverride) {
     if (myToken !== lookupToken) return;
     lastLookup.word = word;
     lastLookup.lang = lang;
+    lastLookup.source = providerOverride || cached.source || "";
     renderEntry(resultHost, cached.entry, cached.source, cached.word || word, lang, {
       inVocab: cached.inVocab === true,
       leitnerBox: cached.leitnerBox ?? null,
@@ -424,6 +441,7 @@ async function doLookup(word, lang, providerOverride) {
 
   lastLookup.word = word;
   lastLookup.lang = lang;
+  lastLookup.source = providerOverride || "";
 
   // 2) server chain (or override)
   const body = { lang, word };
@@ -448,6 +466,7 @@ async function doLookup(word, lang, providerOverride) {
     inVocab: data.in_vocab === true,
     leitnerBox: data.leitner_box ?? null,
   });
+  lastLookup.source = data.source || "";
   cache.set(lang, word, data.source, {
     entry: data.entry,
     word,
@@ -676,8 +695,9 @@ function canonical(raw) {
 }
 
 // Global / shortcut + arrow-key cycling of the result-area switcher when the
-// search input has no suggestion dropdown open.
-document.addEventListener("keydown", (e) => {
+// search input has no suggestion dropdown open. Named so dispose() can
+// detach the listener when the page unmounts.
+function onGlobalKeydown(e) {
   if (e.key === "/" && !isTyping(e.target)) {
     e.preventDefault();
     const input = document.getElementById("dict-search");
@@ -694,10 +714,42 @@ document.addEventListener("keydown", (e) => {
       cycleProvider(list, lang, e.key === "ArrowRight" ? 1 : -1);
     }
   }
-});
+}
+document.addEventListener("keydown", onGlobalKeydown);
 
 function isTyping(el) {
   if (!el) return false;
   const tag = el.tagName;
   return tag === "INPUT" || tag === "TEXTAREA" || el.isContentEditable;
+}
+
+// Save the current user-visible state so navigating away and back
+// returns to the same view. The router calls this on every hash
+// change; pages without saveState contribute nothing.
+export function saveState() {
+  const input = document.getElementById("dict-search");
+  const searchInput = input ? input.value : "";
+  // Only persist if there is something worth restoring. An empty
+  // search input with no last lookup means the page was a fresh
+  // blank, which the next mount would render anyway.
+  if (!searchInput && !lastLookup.word) return null;
+  return {
+    searchInput,
+    lastLookup: lastLookup.word
+      ? { word: lastLookup.word, lang: lastLookup.lang, source: lastLookup.source }
+      : null,
+  };
+}
+
+// Drop the global "/" shortcut listener the page attaches at module
+// load. The router calls this right before mounting the next page so
+// the listener doesn't fire while a different page is on screen.
+// (Per-input listeners are bound to elements that get destroyed when
+// the host is re-rendered, so they don't pile up.)
+export function dispose() {
+  document.removeEventListener("keydown", onGlobalKeydown);
+  if (suggestTimer) {
+    clearTimeout(suggestTimer);
+    suggestTimer = null;
+  }
 }

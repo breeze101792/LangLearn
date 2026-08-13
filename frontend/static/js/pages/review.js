@@ -7,6 +7,7 @@ import { toast } from "../components/toast.js";
 import { renderWordCard, entryFromVocabRow } from "../components/word-card.js";
 import { findCachedRecord } from "../components/review-cache.js";
 import { bindSpeakButtons } from "../components/speak.js";
+import { consumeRestoredState } from "../components/page-state.js";
 
 let session = null; // { items, idx, sessionSize }
 // Provider metadata for the active language, loaded once per session so the
@@ -18,6 +19,7 @@ let providerMetaLang = null;
 export function renderReview(host) {
   const state = store.get();
   const lang = (state.settings && state.settings.active_language) || "en";
+  const restored = consumeRestoredState();
   host.innerHTML = `
     <header class="page-head">
       <h1 class="page-head__title">Review</h1>
@@ -26,6 +28,20 @@ export function renderReview(host) {
     <section id="review-body"></section>
   `;
   const body = host.querySelector("#review-body");
+  // If we navigated away mid-session, restore it directly. The items
+  // list and current index are persisted; we replay the session at the
+  // saved point instead of going through the pre-session "Ready to
+  // review" screen.
+  if (restored && Array.isArray(restored.items) && restored.items.length &&
+      typeof restored.idx === "number" && restored.lang === lang) {
+    session = {
+      items: restored.items,
+      idx: Math.max(0, Math.min(restored.idx, restored.items.length - 1)),
+      lang,
+    };
+    renderSession(body);
+    return;
+  }
   renderPreSession(body, lang);
 }
 
@@ -366,6 +382,24 @@ function sessionKeyHandler(e) {
     const b = document.getElementById("know-it");
     if (b) b.click();
   }
+}
+
+// Persist the in-progress session so a quick detour to Settings
+// doesn't lose the user's place. Only worth saving when the user
+// is mid-session — the pre-session and finished screens contribute
+// nothing.
+export function saveState() {
+  if (!session || !session.items || !session.items.length) return null;
+  return {
+    items: session.items,
+    idx: session.idx,
+    lang: session.lang,
+  };
+}
+
+// Detach the keyboard handler so it doesn't fire on a different page.
+export function dispose() {
+  document.removeEventListener("keydown", sessionKeyHandler);
 }
 
 function escapeHtml(s) {
