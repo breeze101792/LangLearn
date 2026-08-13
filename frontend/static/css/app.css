@@ -571,6 +571,8 @@ body.nav-drawer-open { overflow: hidden; }
 /* Result-area provider switcher (lives inside the result card, at the top) */
 .result-provider-switcher {
   display: flex; align-items: center; gap: var(--sp-2);
+  align-self: stretch;
+  justify-content: flex-start;
   margin: 0 0 var(--sp-3) 0;
   padding-bottom: var(--sp-3);
   border-bottom: 1px solid var(--border);
@@ -678,15 +680,26 @@ body.nav-drawer-open { overflow: hidden; }
 }
 .review-card__prompt { font-size: 32px; font-weight: 600; }
 .review-card__reading { font-size: 16px; color: var(--text-secondary); }
+.review-card__actions {
+  display: flex; gap: var(--sp-3); justify-content: center;
+  flex-wrap: wrap;
+}
 .review-card__answer {
-  margin-top: var(--sp-4);
+  margin-top: var(--sp-2);
   text-align: left;
-  max-width: 520px;
+  align-self: stretch;
   width: 100%;
 }
-.review-card__grade-row {
-  display: flex; gap: var(--sp-3); justify-content: center;
-  margin-top: var(--sp-4);
+.review-card__loading {
+  display: flex; align-items: center; gap: var(--sp-3);
+  padding: var(--sp-4);
+  color: var(--text-secondary);
+}
+/* Tighten the switcher↔answer gap when the switcher sits inside the
+   review card, so the source bar visually belongs to the entry below it. */
+.review-card .result-provider-switcher {
+  margin-bottom: 0;
+  padding-bottom: var(--sp-2);
 }
 
 /* Settings layout */

@@ -471,12 +471,8 @@ function renderEntry(host, entry, source, word, lang, vocabState) {
     explanationSecondary: settings.explanation_secondary,
     actions,
   });
-  host.innerHTML = `
-    <div class="card">
-      ${html}
-    </div>
-  `;
-  const card = host.querySelector(".card");
+  host.innerHTML = html;
+  const card = host.querySelector(".word-card");
   renderSwitcherInto(card, lang, source || null, vocabState);
   bindVocabActions(card, { word, lang, entry, source, vocabState });
   bindRegenerateAction(card, { word, lang });
