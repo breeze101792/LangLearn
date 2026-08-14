@@ -175,5 +175,114 @@ for (const helper of [
   });
 }
 
+// 5) Regression: the right-click "Look up word in Dictionary" handoff
+// must win over the sessionStorage-restored previous visit. Before the
+// fix the restored branch ran *after* the pending branch, overwrote
+// the search input with the previous word, and kicked off a second
+// lookup that bumped the token past the new one — the user landed on
+// the dictionary page and saw the *old* word.
+await testAsync("REGRESSION: pendingDictionaryWord wins over restored searchInput", async () => {
+  // Import the singleton modules WITHOUT cache-busting so the test
+  // and the page share the same store / page-state instances.
+  // Cache-busting only on dictionary.js so its module-level state
+  // (lastLookup, lookupToken, providerMeta, ...) starts clean.
+  const stateMod = await import("../frontend/static/js/state.js");
+  const pageStateMod = await import("../frontend/static/js/components/page-state.js");
+  const dictMod = await importFresh("../frontend/static/js/pages/dictionary.js");
+
+  // Seed the previous-visit save, as if the user had just navigated
+  // away from looking up "apple".
+  pageStateMod.setRestoredState({
+    searchInput: "apple",
+    lastLookup: { word: "apple", lang: "en", source: "wordnet" },
+  });
+
+  // Seed the right-click handoff for the new word "banana".
+  stateMod.store.set({ pendingDictionaryWord: "banana" });
+
+  // Stub fetch to count calls and remember the word each one asked
+  // for. The body is JSON-encoded by api.post.
+  const calls = [];
+  globalThis.fetch = async (url, init) => {
+    let body = {};
+    try { body = JSON.parse(init && init.body || "{}"); } catch (_) {}
+    calls.push({ url, word: body.word, provider: body.provider });
+    return { ok: false, status: 503, statusText: "no", json: async () => ({ ok: false }) };
+  };
+
+  const host = window.document.getElementById("app-main");
+  host.innerHTML = "";
+  try {
+    const result = dictMod.renderDictionary(host);
+    if (result && typeof result.then === "function") {
+      await result.catch(() => {});
+    }
+  } catch (e) {
+    throw new Error(`renderDictionary threw: ${e.message}`);
+  }
+
+  // The search input must show the new word, not the restored one.
+  const input = host.querySelector("#dict-search");
+  assert(input, "search input rendered");
+  assert(
+    input.value === "banana",
+    `expected input to show pending word "banana", got "${input.value}"`
+  );
+
+  // The pending field was consumed (one-shot), so it doesn't leak
+  // into a later unrelated visit.
+  assert(
+    stateMod.store.get().pendingDictionaryWord === null,
+    "pendingDictionaryWord should be cleared after consumption"
+  );
+
+  // Exactly one lookup should have been kicked off — the pending
+  // one. The restored branch must not fire a second lookup, because
+  // it would race the pending one and win on the token guard.
+  const lookupCalls = calls.filter((c) => c.url && c.url.includes("/api/dictionary/lookup"));
+  assert(
+    lookupCalls.length === 1,
+    `expected exactly one lookup, got ${lookupCalls.length}`
+  );
+  assert(
+    lookupCalls[0].word === "banana",
+    `expected lookup word "banana", got "${lookupCalls[0].word}"`
+  );
+});
+
+await testAsync("REGRESSION: without a pending word, restored searchInput still applies", async () => {
+  // Guards against over-correction: when the user navigates back via
+  // the nav (no handoff), the previous search input must still come
+  // back. Otherwise the dictionary page loses its restore feature.
+  const stateMod = await import("../frontend/static/js/state.js");
+  const pageStateMod = await import("../frontend/static/js/components/page-state.js");
+  const dictMod = await importFresh("../frontend/static/js/pages/dictionary.js");
+
+  pageStateMod.setRestoredState({
+    searchInput: "apple",
+    lastLookup: { word: "apple", lang: "en", source: "wordnet" },
+  });
+  assert(
+    stateMod.store.get().pendingDictionaryWord === null,
+    "no pending word for this visit"
+  );
+
+  globalThis.fetch = async () => ({ ok: false, status: 503, statusText: "no", json: async () => ({ ok: false }) });
+
+  const host = window.document.getElementById("app-main");
+  host.innerHTML = "";
+  try {
+    const result = dictMod.renderDictionary(host);
+    if (result && typeof result.then === "function") {
+      await result.catch(() => {});
+    }
+  } catch (e) {
+    throw new Error(`renderDictionary threw: ${e.message}`);
+  }
+
+  const input = host.querySelector("#dict-search");
+  assert(input.value === "apple", `expected restored input "apple", got "${input.value}"`);
+});
+
 console.log(`\n${passed} passed, ${failures} failed`);
 process.exit(failures === 0 ? 0 : 1);

@@ -112,20 +112,27 @@ export function renderDictionary(host) {
 
   // Consume any pending word the right-click "Look up word" menu set
   // before navigating here. Prefill the input and run the lookup so
-  // the user lands on a real result, not an empty search box.
+  // the user lands on a real result, not an empty search box. The
+  // pending word is the user's most recent explicit intent, so it
+  // takes priority over the sessionStorage-restored previous view
+  // (otherwise the restored lastLookup would bump lookupToken and
+  // drop the new-word response, leaving the old word on screen).
   const pending = store.get().pendingDictionaryWord;
+  let consumeRestored = true;
   if (pending) {
     store.set({ pendingDictionaryWord: null });
     const word = canonical(pending);
     if (word) {
       input.value = word.replace(/_/g, " ");
       doLookup(word, lang);
+      consumeRestored = false;
     }
   }
 
   // Page-state restoration: bring back the search input and the last
-  // lookup so the user lands on the same view they left.
-  if (restored && typeof restored === "object") {
+  // lookup so the user lands on the same view they left. Skipped when
+  // a right-click handoff already pre-filled this visit.
+  if (consumeRestored && restored && typeof restored === "object") {
     if (typeof restored.searchInput === "string") {
       input.value = restored.searchInput;
     }
