@@ -10,6 +10,7 @@ export function renderPhrases(host) {
   const lang = (state.settings && state.settings.active_language) || "en";
   const primary = (state.settings && state.settings.explanation_primary) || null;
   const secondary = (state.settings && state.settings.explanation_secondary) || null;
+  const restored = consumeRestoredState();
 
   const fields = [
     { key: "phrase",               label: "Phrase (in target language)", max: 500, required: true },

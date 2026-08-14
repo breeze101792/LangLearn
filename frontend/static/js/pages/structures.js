@@ -10,6 +10,7 @@ export function renderStructures(host) {
   const lang = (state.settings && state.settings.active_language) || "en";
   const primary = (state.settings && state.settings.explanation_primary) || null;
   const secondary = (state.settings && state.settings.explanation_secondary) || null;
+  const restored = consumeRestoredState();
 
   // Hide explanation fields whose language equals the target — the row
   // itself already shows the target language, so the gloss is redundant.

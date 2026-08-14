@@ -286,6 +286,13 @@ export function renderVocabulary(host) {
             return;
           }
           toast({ title: "Restored", variant: "success", ttl: 1500 });
+          load();
+        },
+      }] : [],
+    });
+    load();
+  }
+
   load();
 
   // Expose the live state on the module so saveState() can read it
@@ -308,14 +315,6 @@ export function saveState() {
   // and keeps the storage clean.
   if (!activeBox && !offset) return null;
   return { activeBox, offset };
-}
-        },
-      }] : [],
-    });
-    load();
-  }
-
-  load();
 }
 
 function clampBox(v) {

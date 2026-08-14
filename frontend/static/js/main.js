@@ -105,13 +105,13 @@ function pageSpecFor(hash) {
 }
 
 let currentModule = null;
-let currentHash = null;
+let currentRouteHash = null;
 
 async function route() {
   const main = document.getElementById("app-main");
   if (!main) return;
   const nextHash = currentHash();
-  const prevHash = currentHash;
+  const prevHash = currentRouteHash;
   const prevModule = currentModule;
 
   // 1) Let the outgoing page snapshot its state. We capture *before* we
@@ -141,7 +141,7 @@ async function route() {
   const spec = pageSpecFor(nextHash);
   const mod = await spec.load();
   currentModule = mod;
-  currentHash = nextHash;
+  currentRouteHash = nextHash;
   const fn = pickRenderFn(mod, spec.hash);
   if (typeof fn === "function") fn(main);
 }
