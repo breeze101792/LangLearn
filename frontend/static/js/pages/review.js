@@ -4,10 +4,13 @@ import { api } from "../api.js";
 import { cache } from "../cache.js";
 import { store } from "../state.js";
 import { toast } from "../components/toast.js";
-import { renderWordCard, entryFromVocabRow } from "../components/word-card.js";
+import { entryFromVocabRow } from "../components/word-card.js";
 import { findCachedRecord } from "../components/review-cache.js";
-import { bindSpeakButtons } from "../components/speak.js";
 import { consumeRestoredState } from "../components/page-state.js";
+import {
+  renderDictCard,
+  switcherProvidersFor,
+} from "../components/dict-card.js";
 
 let session = null; // { items, idx, sessionSize }
 // Provider metadata for the active language, loaded once per session so the
@@ -99,7 +102,7 @@ function renderSession(host) {
       <div class="progress" aria-label="Progress" style="flex: 1"><div class="progress__bar" style="width: ${pct.toFixed(1)}%"></div></div>
       <button id="end-session" class="btn btn--ghost btn--sm">End session</button>
     </div>
-    <div class="review-card" id="review-card">
+    <div class="card review-card" id="review-card">
       <div class="review-card__prompt">${escapeHtml(item.word)}</div>
       <div class="review-card__reading">${escapeHtml(item.pos || "")}</div>
       <p class="field__hint">Recall the meaning, then reveal. Or skip if you already know it.</p>
@@ -107,6 +110,9 @@ function renderSession(host) {
         <button id="reveal" class="btn btn--primary btn--lg">Reveal (Space)</button>
         <button id="know-it" class="btn btn--ghost btn--lg" title="Grade as easy and move on">I know this (3)</button>
       </div>
+    </div>
+    <div class="review-result" id="review-result" hidden>
+      <div id="review-answer"></div>
     </div>
   `;
   host.querySelector("#end-session").addEventListener("click", () => {
@@ -120,29 +126,30 @@ function renderSession(host) {
 }
 
 async function reveal(host, item) {
-  const card = host.querySelector("#review-card");
   const actions = host.querySelector("#review-actions");
+  const resultHost = host.querySelector("#review-result");
+  const answerHost = host.querySelector("#review-answer");
 
   // Prefer the cached full WordEntry from the Dictionary page so the review
   // reveal shows the same rich layout (all senses, explanations, examples).
   // Fall back to building a one-sense entry from the vocab row.
-  // Use cache.get directly so we keep the .source the entry was fetched
-  // under — that drives the switcher highlight and the source badge.
   const cached = findCachedRecord(item.language, item.word);
   const entry = (cached && cached.entry) || entryFromVocabRow(item);
   const initialSource = (cached && cached.source) || item.source || "";
 
-  const settings = store.get().settings || {};
-  const answer = document.createElement("div");
-  answer.className = "review-card__answer";
-  answer.innerHTML = renderWordCard(entry, {
-    source: initialSource,
-    languages: store.get().languages || [],
-    explanationPrimary: settings.explanation_primary,
-    explanationSecondary: settings.explanation_secondary,
-  });
-  card.appendChild(answer);
-  bindSpeakButtons(answer);
+  await ensureProviderMeta(item.language);
+  const providers = switcherListFor(item.language);
+
+  // Render the dictionary entry as a single card (no doubled .card
+  // wrapper). The provider switcher, vocab control, and speak buttons
+  // are wired by renderDictCard.
+  renderDictCard(answerHost, entry, initialSource, item.word, item.language,
+    { inVocab: true, leitnerBox: item.leitner_box ?? null },
+    providers,
+    (w, name) => switchAnswerProvider(item, answerHost, name),
+    null);
+
+  resultHost.hidden = false;
 
   // Swap the action row contents: remove "I know this" and surface Hard/Easy
   // up here, where the user is already focused, instead of after the answer.
@@ -153,14 +160,6 @@ async function reveal(host, item) {
   host.querySelector("#grade-hard").addEventListener("click", () => grade(item, "hard", host));
   host.querySelector("#grade-easy").addEventListener("click", () => grade(item, "easy", host));
   host.querySelector("#grade-easy").focus();
-
-  // Provider switcher. Same shape as the dictionary result so it reuses the
-  // existing `.result-provider-switcher` styles. Switching fetches the entry
-  // for the chosen provider (cache first, server fallback) and re-renders
-  // the answer in place — grading buttons stay where they are.
-  await ensureProviderMeta(item.language);
-  const switcher = buildSwitcher(item, answer, initialSource);
-  card.insertBefore(switcher, answer);
 }
 
 async function ensureProviderMeta(lang) {
@@ -177,130 +176,26 @@ async function ensureProviderMeta(lang) {
 }
 
 function switcherListFor(lang) {
-  const meta = providerMeta || {};
-  const settings = store.get().settings || {};
-  const chain = (settings.dict_chain_json || {})[lang] || [];
-  const items = [];
-  const seen = new Set();
-  for (const e of chain) {
-    if (!e || !e.name) continue;
-    const m = meta[e.name];
-    items.push({
-      name: e.name,
-      display_name: (m && m.display_name) || (e.name === "llm" ? "AI" : e.name),
-      kind: (m && m.kind) || (e.name === "llm" ? "ai" : "builtin"),
-      supports: m ? m.supports !== false : true,
-      enabled: e.enabled !== false,
-    });
-    seen.add(e.name);
-  }
-  if (!seen.has("llm")) {
-    items.push({ name: "llm", display_name: "AI", kind: "ai", supports: true, enabled: true });
-  }
-  // Filter to providers the active language actually supports. A provider
-  // that's missing from the metadata is treated as supported.
-  return items.filter((p) => p.supports);
+  return switcherProvidersFor(lang, providerMeta);
 }
 
-function buildSwitcher(item, answer, activeName) {
-  const list = switcherListFor(item.language);
-  const bar = document.createElement("div");
-  bar.className = "result-provider-switcher";
-  bar.innerHTML = `
-    <span class="result-provider-switcher__label">Source:</span>
-    <button class="provider-switcher__nav" type="button" data-action="prev" aria-label="Previous provider" ${list.length < 2 ? "disabled" : ""}>‹</button>
-    <div class="segmented" role="radiogroup" aria-label="Dictionary provider"></div>
-    <button class="provider-switcher__nav" type="button" data-action="next" aria-label="Next provider" ${list.length < 2 ? "disabled" : ""}>›</button>
-  `;
-  const segments = bar.querySelector(".segmented");
-  paintSegments(segments, list, activeName, item, answer, bar);
-  bar.querySelector("[data-action='prev']").addEventListener("click", () => {
-    cycleProvider(list, activeName, -1, item, answer, bar, segments);
-  });
-  bar.querySelector("[data-action='next']").addEventListener("click", () => {
-    cycleProvider(list, activeName, 1, item, answer, bar, segments);
-  });
-  return bar;
-}
-
-function paintSegments(segments, list, selectedName, item, answer, switcher) {
-  segments.innerHTML = list.map((p) => {
-    const active = (selectedName || "") === p.name;
-    const ai = p.kind === "ai";
-    const disabled = p.enabled === false;
-    const cls = ["segmented__item"];
-    if (active) cls.push("segmented__item--active");
-    if (ai) cls.push("segmented__item--ai");
-    if (disabled) cls.push("segmented__item--disabled");
-    return `<button type="button" class="${cls.join(" ")}"
-              data-provider="${escapeHtml(p.name)}"
-              role="radio"
-              aria-checked="${active}"
-              ${disabled ? 'aria-disabled="true"' : ""}>${escapeHtml(p.display_name || p.name)}</button>`;
-  }).join("");
-  segments.querySelectorAll(".segmented__item").forEach((el) => {
-    el.addEventListener("click", () => {
-      const name = el.dataset.provider;
-      const p = list.find((x) => x.name === name);
-      if (!p || p.enabled === false) return;
-      selectProvider(segments, name);
-      switchAnswerProvider(item, answer, name, switcher);
-    });
-  });
-}
-
-function selectProvider(segments, name) {
-  segments.querySelectorAll(".segmented__item").forEach((el) => {
-    const isActive = el.dataset.provider === name;
-    el.classList.toggle("segmented__item--active", isActive);
-    el.setAttribute("aria-checked", isActive ? "true" : "false");
-  });
-}
-
-function cycleProvider(list, currentName, delta, item, answer, switcher, segments) {
-  if (!list.length) return;
-  const cur = currentName || "";
-  let idx = list.findIndex((p) => p.name === cur);
-  if (idx === -1) idx = delta > 0 ? -1 : 0;
-  let next = (idx + delta + list.length) % list.length;
-  const target = list[next];
-  if (!target || target.enabled === false) return;
-  selectProvider(segments, target.name);
-  switchAnswerProvider(item, answer, target.name, switcher);
-}
-
-async function switchAnswerProvider(item, answer, provider, switcher) {
-  // 1) cache hit for this exact provider
-  const hit = cache.get(item.language, item.word, provider);
-  if (hit && hit.entry) {
-    paintAnswer(answer, hit.entry, hit.source, item);
-    setSwitcherBusy(switcher, false);
+async function switchAnswerProvider(item, answerHost, provider) {
+  const cached = cache.get(item.language, item.word, provider);
+  if (cached && cached.entry) {
+    repaintAnswer(answerHost, cached.entry, cached.source || provider, item);
     return;
   }
-  // 2) server lookup with explicit provider
-  setSwitcherBusy(switcher, true);
-  // Stash current content so we can restore it if the lookup fails.
-  const previous = answer.innerHTML;
-  answer.innerHTML = `
-    <div class="review-card__loading">
-      <span class="spinner"></span>
-      <span>Looking up "${escapeHtml(item.word)}" from ${escapeHtml(providerDisplayName(provider))}…</span>
-    </div>
-  `;
   const res = await api.post("/api/dictionary/lookup", {
     lang: item.language,
     word: item.word,
     provider,
   });
-  setSwitcherBusy(switcher, false);
   if (!res.ok) {
-    answer.innerHTML = previous;
     toast({ title: "Couldn't switch provider", message: res.error, variant: "error" });
     return;
   }
   const data = res.data || {};
   if (!data.entry || !data.entry.senses || data.entry.senses.length === 0) {
-    answer.innerHTML = previous;
     toast({ title: "No result from this provider", message: "Try a different source.", variant: "info" });
     return;
   }
@@ -311,30 +206,16 @@ async function switchAnswerProvider(item, answer, provider, switcher) {
     inVocab: false,
     leitnerBox: null,
   });
-  paintAnswer(answer, data.entry, data.source || provider, item);
+  repaintAnswer(answerHost, data.entry, data.source || provider, item);
 }
 
-function providerDisplayName(name) {
-  if (name === "llm") return "AI";
-  if (name === "wordnet") return "WordNet";
-  return name;
-}
-
-function paintAnswer(answer, entry, source, item) {
-  const settings = store.get().settings || {};
-  answer.innerHTML = renderWordCard(entry, {
-    source,
-    languages: store.get().languages || [],
-    explanationPrimary: settings.explanation_primary,
-    explanationSecondary: settings.explanation_secondary,
-  });
-  bindSpeakButtons(answer);
-}
-
-function setSwitcherBusy(switcher, busy) {
-  if (!switcher) return;
-  switcher.classList.toggle("is-busy", busy);
-  switcher.querySelectorAll("button").forEach((b) => { b.disabled = busy; });
+function repaintAnswer(answerHost, entry, source, item) {
+  const providers = switcherListFor(item.language);
+  renderDictCard(answerHost, entry, source, item.word, item.language,
+    { inVocab: true, leitnerBox: item.leitner_box ?? null },
+    providers,
+    (w, name) => switchAnswerProvider(item, answerHost, name),
+    null);
 }
 
 async function grade(item, value, host) {

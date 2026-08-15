@@ -329,7 +329,11 @@ body.nav-drawer-open { overflow: hidden; }
   padding-left: var(--sp-4);
   border-left: 3px solid var(--accent);
 }
-.word-card__sense__gloss { color: var(--text-primary); }
+.word-card__sense__gloss {
+  color: var(--text-primary);
+  display: flex; align-items: baseline; gap: var(--sp-2);
+  flex-wrap: wrap;
+}
 .word-card__sense__example {
   margin-top: var(--sp-2);
   padding: var(--sp-2) var(--sp-3);
@@ -668,15 +672,12 @@ body.nav-drawer-open { overflow: hidden; }
   max-height: 90vh; overflow: auto;
 }
 
-/* Review card */
+/* Review card — its own card, holding the prompt + grade buttons. */
 .review-card {
   display: flex; flex-direction: column; align-items: center;
   text-align: center;
-  padding: var(--sp-10) var(--sp-4);
-  gap: var(--sp-4);
-  background: var(--surface);
-  border-radius: var(--r-lg);
-  border: 1px solid var(--border);
+  padding: var(--sp-8) var(--sp-4);
+  gap: var(--sp-3);
 }
 .review-card__prompt { font-size: 32px; font-weight: 600; }
 .review-card__reading { font-size: 16px; color: var(--text-secondary); }
@@ -684,23 +685,17 @@ body.nav-drawer-open { overflow: hidden; }
   display: flex; gap: var(--sp-3); justify-content: center;
   flex-wrap: wrap;
 }
-.review-card__answer {
-  margin-top: var(--sp-2);
-  text-align: left;
-  align-self: stretch;
-  width: 100%;
-}
 .review-card__loading {
   display: flex; align-items: center; gap: var(--sp-3);
   padding: var(--sp-4);
   color: var(--text-secondary);
 }
-/* Tighten the switcher↔answer gap when the switcher sits inside the
-   review card, so the source bar visually belongs to the entry below it. */
-.review-card .result-provider-switcher {
-  margin-bottom: 0;
-  padding-bottom: var(--sp-2);
-}
+/* On the Review page, the reveal answer is a single .card.word-card (same
+   as the dictionary page) rendered into a bare .review-result wrapper.
+   The wrapper only adds vertical spacing; the word card supplies its own
+   chrome. */
+.review-result { margin-top: var(--sp-4); }
+.review-result .result-provider-switcher { margin: 0 0 var(--sp-3) 0; }
 
 /* Settings layout */
 .settings { display: grid; grid-template-columns: 220px 1fr; gap: var(--sp-8); }
