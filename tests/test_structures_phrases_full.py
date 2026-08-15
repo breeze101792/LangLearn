@@ -626,3 +626,218 @@ def test_phrases_wrong_method_405():
     client = app.test_client()
     r = client.patch("/api/phrases")
     assert r.status_code == 405
+
+
+# --- pagination -----------------------------------------------------------
+
+
+def _seed_structures(client, n, lang="en"):
+    ids = []
+    for i in range(n):
+        r = client.post("/api/structures",
+                        json={"language": lang, "pattern": f"P{i}",
+                              "explanation_primary": "x", "source": "user",
+                              "example_sentence": "...", "explanation": "..."})
+        ids.append(r.get_json()["data"]["id"])
+    return ids
+
+
+def _seed_phrases(client, n, lang="en"):
+    ids = []
+    for i in range(n):
+        r = client.post("/api/phrases",
+                        json={"language": lang, "phrase": f"Phrase {i}",
+                              "explanation_primary": "x", "source": "user",
+                              "explanation": "...", "example_sentence": "..."})
+        ids.append(r.get_json()["data"]["id"])
+    return ids
+
+
+def test_structures_list_pagination():
+    from backend.app import create_app
+    from backend.db import init_schema
+    init_schema()
+    app = create_app()
+    client = app.test_client()
+    _seed_structures(client, 5)
+    r1 = client.get("/api/structures?lang=en&limit=2&offset=0")
+    r2 = client.get("/api/structures?lang=en&limit=2&offset=2")
+    r3 = client.get("/api/structures?lang=en&limit=2&offset=4")
+    assert r1.status_code == 200
+    body1 = r1.get_json()["data"]
+    body2 = r2.get_json()["data"]
+    body3 = r3.get_json()["data"]
+    assert body1["total"] == 5
+    assert len(body1["items"]) == 2
+    assert len(body2["items"]) == 2
+    assert len(body3["items"]) == 1  # last partial page
+    assert body1["limit"] == 2
+    assert body1["offset"] == 0
+    assert body3["offset"] == 4
+    ids = [i["id"] for i in body1["items"] + body2["items"] + body3["items"]]
+    assert len(set(ids)) == 5
+
+
+def test_structures_list_pagination_default_returns_all_small():
+    """Without limit/offset the endpoint defaults to limit=100, so a
+    small set comes back in one page with a correct total."""
+    from backend.app import create_app
+    from backend.db import init_schema
+    init_schema()
+    app = create_app()
+    client = app.test_client()
+    _seed_structures(client, 3)
+    body = client.get("/api/structures?lang=en").get_json()["data"]
+    assert body["total"] == 3
+    assert len(body["items"]) == 3
+    assert body["limit"] == 100
+    assert body["offset"] == 0
+
+
+def test_structures_list_pagination_respects_familiar_filter():
+    """Pagination counts honor the familiar filter so page totals match
+    what's shown, not the whole language set."""
+    from backend.app import create_app
+    from backend.db import init_schema
+    init_schema()
+    app = create_app()
+    client = app.test_client()
+    ids = _seed_structures(client, 3)
+    client.patch(f"/api/structures/{ids[0]}", json={"familiar": True})
+    familiar = client.get("/api/structures?lang=en&familiar=1&limit=10").get_json()["data"]
+    unfamiliar = client.get("/api/structures?lang=en&familiar=0&limit=10").get_json()["data"]
+    assert familiar["total"] == 1
+    assert len(familiar["items"]) == 1
+    assert unfamiliar["total"] == 2
+    assert len(unfamiliar["items"]) == 2
+
+
+def test_structures_list_pagination_clamps_limit():
+    from backend.app import create_app
+    from backend.db import init_schema
+    init_schema()
+    app = create_app()
+    client = app.test_client()
+    _seed_structures(client, 2)
+    body = client.get("/api/structures?lang=en&limit=99999").get_json()["data"]
+    assert body["limit"] == 500  # clamped to max
+    assert len(body["items"]) == 2
+
+
+def test_structures_list_pagination_negative_offset_clamped():
+    from backend.app import create_app
+    from backend.db import init_schema
+    init_schema()
+    app = create_app()
+    client = app.test_client()
+    _seed_structures(client, 2)
+    body = client.get("/api/structures?lang=en&limit=5&offset=-10").get_json()["data"]
+    assert body["offset"] == 0
+    assert len(body["items"]) == 2
+
+
+def test_structures_list_pagination_invalid_limit_400():
+    from backend.app import create_app
+    from backend.db import init_schema
+    init_schema()
+    app = create_app()
+    client = app.test_client()
+    r = client.get("/api/structures?lang=en&limit=abc")
+    assert r.status_code == 400
+
+
+def test_structures_list_pagination_invalid_offset_400():
+    from backend.app import create_app
+    from backend.db import init_schema
+    init_schema()
+    app = create_app()
+    client = app.test_client()
+    r = client.get("/api/structures?lang=en&offset=abc")
+    assert r.status_code == 400
+
+
+def test_phrases_list_pagination():
+    from backend.app import create_app
+    from backend.db import init_schema
+    init_schema()
+    app = create_app()
+    client = app.test_client()
+    _seed_phrases(client, 5)
+    r1 = client.get("/api/phrases?lang=en&limit=2&offset=0")
+    r2 = client.get("/api/phrases?lang=en&limit=2&offset=2")
+    r3 = client.get("/api/phrases?lang=en&limit=2&offset=4")
+    assert r1.status_code == 200
+    body1 = r1.get_json()["data"]
+    body2 = r2.get_json()["data"]
+    body3 = r3.get_json()["data"]
+    assert body1["total"] == 5
+    assert len(body1["items"]) == 2
+    assert len(body2["items"]) == 2
+    assert len(body3["items"]) == 1
+    assert body1["limit"] == 2
+    assert body1["offset"] == 0
+    assert body3["offset"] == 4
+    ids = [i["id"] for i in body1["items"] + body2["items"] + body3["items"]]
+    assert len(set(ids)) == 5
+
+
+def test_phrases_list_pagination_default_returns_all_small():
+    from backend.app import create_app
+    from backend.db import init_schema
+    init_schema()
+    app = create_app()
+    client = app.test_client()
+    _seed_phrases(client, 3)
+    body = client.get("/api/phrases?lang=en").get_json()["data"]
+    assert body["total"] == 3
+    assert len(body["items"]) == 3
+    assert body["limit"] == 100
+    assert body["offset"] == 0
+
+
+def test_phrases_list_pagination_respects_familiar_filter():
+    from backend.app import create_app
+    from backend.db import init_schema
+    init_schema()
+    app = create_app()
+    client = app.test_client()
+    ids = _seed_phrases(client, 3)
+    client.patch(f"/api/phrases/{ids[0]}", json={"familiar": True})
+    familiar = client.get("/api/phrases?lang=en&familiar=1&limit=10").get_json()["data"]
+    unfamiliar = client.get("/api/phrases?lang=en&familiar=0&limit=10").get_json()["data"]
+    assert familiar["total"] == 1
+    assert len(familiar["items"]) == 1
+    assert unfamiliar["total"] == 2
+    assert len(unfamiliar["items"]) == 2
+
+
+def test_phrases_list_pagination_clamps_limit():
+    from backend.app import create_app
+    from backend.db import init_schema
+    init_schema()
+    app = create_app()
+    client = app.test_client()
+    _seed_phrases(client, 2)
+    body = client.get("/api/phrases?lang=en&limit=99999").get_json()["data"]
+    assert body["limit"] == 500
+    assert len(body["items"]) == 2
+
+
+def test_phrases_list_pagination_invalid_limit_400():
+    from backend.app import create_app
+    from backend.db import init_schema
+    init_schema()
+    app = create_app()
+    client = app.test_client()
+    r = client.get("/api/phrases?lang=en&limit=abc")
+    assert r.status_code == 400
+
+
+def test_phrases_list_pagination_invalid_offset_400():
+    from backend.app import create_app
+    from backend.db import init_schema
+    init_schema()
+    app = create_app()
+    client = app.test_client()
+    r = client.get("/api/phrases?lang=en&offset=abc")
+    assert r.status_code == 400

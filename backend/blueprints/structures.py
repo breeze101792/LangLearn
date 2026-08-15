@@ -16,7 +16,8 @@ EDITABLE_SOURCES = ("user", "llm")
 READONLY_SOURCES = ("built-in",)
 
 
-def _list(lang: str, *, familiar: bool | None = None) -> list[dict]:
+def _list(lang: str, *, familiar: bool | None = None,
+          limit: int = 100, offset: int = 0) -> tuple[list[dict], int]:
     sql = (
         "SELECT id, language, pattern, example_sentence, explanation,"
         "       explanation_primary, explanation_secondary, source,"
@@ -27,10 +28,19 @@ def _list(lang: str, *, familiar: bool | None = None) -> list[dict]:
     if familiar is not None:
         sql += " AND familiar=?"
         params.append(1 if familiar else 0)
-    sql += " ORDER BY source DESC, added_at DESC"
+    sql += " ORDER BY source DESC, added_at DESC LIMIT ? OFFSET ?"
+    params += [limit, offset]
+    where = "user_id=? AND language=?"
+    count_params: list = [config.DEFAULT_USER_ID, lang]
+    if familiar is not None:
+        where += " AND familiar=?"
+        count_params.append(1 if familiar else 0)
     with get_conn() as conn:
         rows = conn.execute(sql, params).fetchall()
-    return [dict(r) for r in rows]
+        total = conn.execute(
+            f"SELECT COUNT(*) AS c FROM structures WHERE {where}", count_params,
+        ).fetchone()["c"]
+    return [dict(r) for r in rows], int(total)
 
 
 def _parse_familiar_arg(raw: str | None) -> bool | None:
@@ -70,7 +80,13 @@ def list_structures():
         familiar = _parse_familiar_arg(request.args.get("familiar"))
     except ValueError as e:
         return jsonify(err(str(e), code="invalid_input")), 400
-    return ok({"items": _list(lang, familiar=familiar)})
+    try:
+        limit = max(1, min(500, int(request.args.get("limit", 100))))
+        offset = max(0, int(request.args.get("offset", 0)))
+    except (TypeError, ValueError):
+        return jsonify(err("limit/offset must be integers", code="invalid_input")), 400
+    items, total = _list(lang, familiar=familiar, limit=limit, offset=offset)
+    return ok({"items": items, "limit": limit, "offset": offset, "total": total})
 
 
 @bp.post("")

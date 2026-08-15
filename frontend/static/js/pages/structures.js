@@ -127,7 +127,9 @@ function escapeHtml(s) {
 function renderListPage({ host, title, kind, endpoint, fillEndpoint, emptyMsg, emptyActions, rowRenderer, fields, addBody, restored }) {
   const state = store.get();
   const lang = (state.settings && state.settings.active_language) || "en";
+  const pageSize = (state.settings && state.settings.page_size) || 20;
   let viewFamiliar = false;
+  let offset = 0;
 
   host.innerHTML = `
     <header class="page-head">
@@ -158,8 +160,8 @@ function renderListPage({ host, title, kind, endpoint, fillEndpoint, emptyMsg, e
     }
   });
 
-  // Restore the saved familiar filter and add-panel state so the user
-  // lands on the same view they left.
+  // Restore the saved familiar filter, pagination, and add-panel state so
+  // the user lands on the same view they left.
   if (restored && typeof restored === "object") {
     if (restored.viewFamiliar === true || restored.viewFamiliar === false) {
       viewFamiliar = restored.viewFamiliar;
@@ -168,6 +170,9 @@ function renderListPage({ host, title, kind, endpoint, fillEndpoint, emptyMsg, e
         b.classList.toggle("is-active", on);
         b.setAttribute("aria-selected", on ? "true" : "false");
       });
+    }
+    if (Number.isFinite(restored.offset) && restored.offset >= 0) {
+      offset = restored.offset;
     }
     if (restored.addOpen && restored.addDraft && typeof restored.addDraft === "object") {
       const panel = document.getElementById("add-panel");
@@ -191,6 +196,7 @@ function renderListPage({ host, title, kind, endpoint, fillEndpoint, emptyMsg, e
     const next = btn.dataset.familiar === "1";
     if (next === viewFamiliar) return;
     viewFamiliar = next;
+    offset = 0;
     host.querySelectorAll("#familiar-segments .segmented__item").forEach((b) => {
       const on = b === btn;
       b.classList.toggle("is-active", on);
@@ -200,14 +206,25 @@ function renderListPage({ host, title, kind, endpoint, fillEndpoint, emptyMsg, e
   });
 
   const list = host.querySelector("#list");
+  list.addEventListener("click", (e) => {
+    const prev = e.target.closest("button[data-pager='prev']");
+    if (prev && !prev.disabled) { offset = Math.max(0, offset - pageSize); load(); return; }
+    const next = e.target.closest("button[data-pager='next']");
+    if (next && !next.disabled) { offset += pageSize; load(); return; }
+  });
+
   async function load() {
-    const qs = `lang=${encodeURIComponent(lang)}&familiar=${viewFamiliar ? "1" : "0"}`;
+    const qs = `lang=${encodeURIComponent(lang)}` +
+      `&familiar=${viewFamiliar ? "1" : "0"}` +
+      `&limit=${pageSize}&offset=${offset}`;
     const res = await api.get(`${endpoint}?${qs}`);
     if (!res.ok) {
       list.innerHTML = `<div class="card" style="border-left: 4px solid var(--danger)">${escapeHtml(res.error)}</div>`;
       return;
     }
-    const items = res.data.items || [];
+    const data = res.data || {};
+    const items = data.items || [];
+    const total = Number(data.total) || 0;
     if (!items.length) {
       const msg = viewFamiliar
         ? `No ${title.toLowerCase()} you've marked familiar yet.`
@@ -238,7 +255,7 @@ function renderListPage({ host, title, kind, endpoint, fillEndpoint, emptyMsg, e
       }
       return;
     }
-    list.innerHTML = `<div class="list">${items.map((i) => rowRenderer(i)).join("")}</div>`;
+    list.innerHTML = `<div class="list">${items.map((i) => rowRenderer(i)).join("")}</div>` + renderPager(items.length, total);
     list.querySelectorAll("[data-action='edit']").forEach((b) => {
       b.addEventListener("click", () => editRow(items, b, endpoint, fields, load));
     });
@@ -249,6 +266,22 @@ function renderListPage({ host, title, kind, endpoint, fillEndpoint, emptyMsg, e
       b.addEventListener("click", () => rememberRow(b, endpoint, load));
     });
   }
+
+  function renderPager(itemCount, total) {
+    if (!total) return "";
+    const totalPages = Math.max(1, Math.ceil(total / pageSize));
+    const currentPage = Math.floor(offset / pageSize) + 1;
+    const atStart = offset === 0;
+    const atEnd = offset + itemCount >= total;
+    return `
+      <div class="row" style="margin-top: var(--sp-3); justify-content: center">
+        <button class="btn btn--ghost btn--sm" data-pager="prev" ${atStart ? "disabled" : ""}>← Previous</button>
+        <span class="field__hint" style="margin: 0 var(--sp-2)">Page ${currentPage} of ${totalPages} · ${total} total</span>
+        <button class="btn btn--ghost btn--sm" data-pager="next" ${atEnd ? "disabled" : ""}>Next →</button>
+      </div>
+    `;
+  }
+
   load();
 
   // Expose the live state on the module so saveState() can read it
@@ -256,6 +289,7 @@ function renderListPage({ host, title, kind, endpoint, fillEndpoint, emptyMsg, e
   // every hash change; without this, the page would have to scrape
   // the DOM for the active filter and add-panel draft.
   moduleState.viewFamiliar = () => viewFamiliar;
+  moduleState.offset = () => offset;
   moduleState.addOpen = () => {
     const panel = document.getElementById("add-panel");
     return !!(panel && panel.style.display !== "none");
@@ -274,17 +308,18 @@ function renderListPage({ host, title, kind, endpoint, fillEndpoint, emptyMsg, e
 
 // Module-level handles for the live state of the currently mounted
 // list-page view. Reset on each mount.
-const moduleState = { viewFamiliar: null, addOpen: null, addDraft: null };
+const moduleState = { viewFamiliar: null, offset: null, addOpen: null, addDraft: null };
 
 export function saveState() {
   if (!moduleState.viewFamiliar) return null;
   const viewFamiliar = moduleState.viewFamiliar();
+  const offset = moduleState.offset ? moduleState.offset() : 0;
   const addOpen = moduleState.addOpen ? moduleState.addOpen() : false;
   // Only persist a draft if the panel is open AND there's something
   // to type. The default view (unfamiliar, no add panel) is what a
   // fresh mount would show anyway.
-  if (!viewFamiliar && !addOpen) return null;
-  return { viewFamiliar, addOpen, addDraft: addOpen ? (moduleState.addDraft() || {}) : null };
+  if (!viewFamiliar && !addOpen && !offset) return null;
+  return { viewFamiliar, offset, addOpen, addDraft: addOpen ? (moduleState.addDraft() || {}) : null };
 }
 
 async function editRow(items, btn, endpoint, fields, load) {

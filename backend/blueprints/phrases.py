@@ -41,20 +41,30 @@ def list_phrases():
         familiar = True
     else:
         return jsonify(err("familiar must be 0/1 or true/false", code="invalid_input")), 400
+    try:
+        limit = max(1, min(500, int(request.args.get("limit", 100))))
+        offset = max(0, int(request.args.get("offset", 0)))
+    except (TypeError, ValueError):
+        return jsonify(err("limit/offset must be integers", code="invalid_input")), 400
+    where = "user_id=? AND language=?"
+    params: list = [config.DEFAULT_USER_ID, lang]
+    if familiar is not None:
+        where += " AND familiar=?"
+        params.append(1 if familiar else 0)
     sql = (
         "SELECT id, language, phrase, example_sentence, explanation,"
         "       explanation_primary, explanation_secondary, source,"
         "       familiar, added_at "
-        "FROM phrases WHERE user_id=? AND language=?"
+        f"FROM phrases WHERE {where}"
+        " ORDER BY source DESC, added_at DESC LIMIT ? OFFSET ?"
     )
-    params: list = [config.DEFAULT_USER_ID, lang]
-    if familiar is not None:
-        sql += " AND familiar=?"
-        params.append(1 if familiar else 0)
-    sql += " ORDER BY source DESC, added_at DESC"
     with get_conn() as conn:
-        rows = conn.execute(sql, params).fetchall()
-    return ok({"items": [dict(r) for r in rows]})
+        rows = conn.execute(sql, params + [limit, offset]).fetchall()
+        total = conn.execute(
+            f"SELECT COUNT(*) AS c FROM phrases WHERE {where}", params,
+        ).fetchone()["c"]
+    return ok({"items": [dict(r) for r in rows], "limit": limit,
+               "offset": offset, "total": int(total)})
 
 
 @bp.post("")
