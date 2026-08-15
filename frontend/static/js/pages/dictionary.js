@@ -49,12 +49,16 @@ export function renderDictionary(host) {
       <div class="autocomplete">
         <div class="row" style="gap: var(--sp-2)">
           <label for="dict-search" class="field__label" style="margin: 0; position: absolute; left: -9999px">Word</label>
-          <input id="dict-search" class="input" type="text" autocomplete="off"
-                 placeholder="Type a word to look up…"
-                 aria-label="Dictionary search"
-                 role="combobox" aria-autocomplete="list" aria-expanded="false"
-                 aria-controls="dict-suggest"
-                 style="flex: 1">
+          <div class="dict-search__input-wrap" style="flex: 1; position: relative">
+            <input id="dict-search" class="input" type="text" autocomplete="off"
+                   placeholder="Type a word to look up…"
+                   aria-label="Dictionary search"
+                   role="combobox" aria-autocomplete="list" aria-expanded="false"
+                   aria-controls="dict-suggest">
+            <button id="dict-clear" class="dict-search__clear" type="button"
+                    aria-label="Clear search" hidden>&times;</button>
+          </div>
+          <button id="dict-paste-btn" class="btn" type="button" title="Paste from clipboard and look up">Paste &amp; look up</button>
           <button id="dict-search-btn" class="btn btn--primary">Look up</button>
         </div>
         <ul id="dict-suggest" class="autocomplete__list" role="listbox"
@@ -67,10 +71,24 @@ export function renderDictionary(host) {
 
   const input = host.querySelector("#dict-search");
   const btn = host.querySelector("#dict-search-btn");
+  const clearBtn = host.querySelector("#dict-clear");
+  const pasteBtn = host.querySelector("#dict-paste-btn");
   const result = host.querySelector("#dict-result");
   const suggestEl = host.querySelector("#dict-suggest");
 
+  function syncClearButton() {
+    if (clearBtn) clearBtn.hidden = !input.value;
+  }
+  syncClearButton();
+
   btn.addEventListener("click", () => doLookup(canonical(input.value), lang));
+  clearBtn.addEventListener("click", () => {
+    input.value = "";
+    syncClearButton();
+    hideSuggest(suggestEl);
+    input.focus();
+  });
+  pasteBtn.addEventListener("click", () => pasteAndLookup(lang));
   input.addEventListener("keydown", (e) => {
     if (e.key === "ArrowDown") {
       if (moveSuggestSelection(suggestEl, 1)) e.preventDefault();
@@ -90,6 +108,7 @@ export function renderDictionary(host) {
     }
   });
   input.addEventListener("input", () => {
+    syncClearButton();
     scheduleSuggest(input.value.trim(), lang, suggestEl);
   });
   input.addEventListener("focus", () => {
@@ -277,6 +296,40 @@ function renderEmptyState(host) {
       <div class="empty-state__msg">Type a word above to look it up. Looked-up words are added to your vocab list automatically.</div>
     </div>
   `;
+}
+
+async function pasteAndLookup(lang) {
+  let text = "";
+  try {
+    if (navigator.clipboard && navigator.clipboard.readText) {
+      text = await navigator.clipboard.readText();
+    }
+  } catch (err) {
+    toast({
+      title: "Couldn't read clipboard",
+      message: "Paste a word into the box and press Enter instead.",
+      variant: "info",
+    });
+    const input = document.getElementById("dict-search");
+    if (input) input.focus();
+    return;
+  }
+  const word = canonical(text);
+  const input = document.getElementById("dict-search");
+  if (input) {
+    input.value = word.replace(/_/g, " ");
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  }
+  if (word) {
+    doLookup(word, lang);
+  } else {
+    toast({
+      title: "Clipboard is empty",
+      message: "Nothing to look up.",
+      variant: "info",
+    });
+    if (input) input.focus();
+  }
 }
 
 async function doLookup(word, lang, providerOverride) {

@@ -246,6 +246,31 @@ body.nav-drawer-open { overflow: hidden; }
 }
 .autocomplete__item strong { color: var(--accent); font-weight: 600; }
 
+/* Clear button inside the dictionary search input */
+.dict-search__clear {
+  position: absolute;
+  top: 50%;
+  right: var(--sp-2);
+  transform: translateY(-50%);
+  width: 1.5em;
+  height: 1.5em;
+  padding: 0;
+  border: none;
+  background: var(--surface-sunken);
+  color: var(--text-secondary);
+  border-radius: var(--r-pill);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: background var(--dur-1) var(--ease), color var(--dur-1) var(--ease);
+}
+.dict-search__clear:hover { background: var(--border); color: var(--text-primary); }
+.dict-search__clear[hidden] { display: none; }
+.dict-search__input-wrap .input { width: 100%; padding-right: calc(var(--sp-5) + var(--sp-1)); }
+
 /* "Did you mean" suggestion chips (search no-result) */
 .chip {
   font: inherit;
