@@ -1474,6 +1474,444 @@ def refine_text_via_llm(
     return data
 
 
+# ---- translate_text_via_llm --------------------------------------------
+#
+# "Translate" takes a free-form sentence or short paragraph in any
+# language and produces a translation into the target language (the one
+# the user is learning, i.e. their active language), plus a short
+# teaching breakdown so the page doubles as a study aid rather than a
+# plain translator:
+#
+#   * `translation` — the rendered target-language sentence(s). This is
+#     the headline output.
+#   * `alternatives` — 2-3 other natural ways to say the same thing in
+#     the target language, varying register or word choice.
+#   * `breakdown` — a word-by-word / phrase-by-phrase gloss mapping a
+#     target-language span to the source-language meaning. The source
+#     language is auto-detected by the model; the caller does not pass
+#     it. The UI shows this as a small table under the translation.
+#   * `notes` — a short grammar / usage note (in the target language)
+#     explaining a construction or word choice the learner should
+#     notice. Optional `notes_primary` / `notes_secondary` follow the
+#     same explanation-language rules as the rest of the app.
+#
+# The explanation-language rules still apply to `notes_primary` /
+# `notes_secondary` — primary is skipped when the target language
+# equals it.
+
+# ---- translate_text_via_llm --------------------------------------------
+#
+# "Translate" takes a free-form sentence or short paragraph in any
+# language and produces a translation into the target language (the one
+# the user is learning, i.e. their active language), plus a short
+# teaching breakdown so the page doubles as a study aid rather than a
+# plain translator.
+#
+# The input is split into sentences by the model. Each sentence is its
+# own teaching block so several sentences share one response cleanly:
+#
+#   * `sentences` — one entry per sentence in the input, in order:
+#       - `source`: the sentence lifted verbatim from the input.
+#       - `translation`: the rendered target-language sentence.
+#       - `alternatives`: 2-3 other natural ways to say the *same*
+#         sentence in the target language. Each is an object with
+#         `text` (the alternative) and `nuance` (a short note in the
+#         target language on how the register / word choice / tone
+#         differs from the headline translation).
+#       - `breakdown`: a word-by-word / phrase-by-phrase gloss for
+#         this sentence. `target` is a span lifted from `translation`,
+#         `source` is the matching phrase in the input's original
+#         language, `note` is an optional short grammar/usage gloss in
+#         the target language.
+#       - `notes`: a short paragraph (in the target language) pointing
+#         out one or two constructions a learner should notice for this
+#         sentence.
+#   * `notes` — a short overall summary (in the target language) of the
+#     patterns worth remembering across the whole input.
+#   * `notes_primary` / `notes_secondary` — translations of the
+#     top-level `notes` for the user's native languages, following the
+#     same explanation-language rules as the rest of the app.
+#
+# The source language is auto-detected by the model. The explanation-
+# language rules apply to `notes_primary` / `notes_secondary` — primary
+# is skipped when the target language equals it.
+
+TRANSLATE_SENTENCE_ITEM: dict = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["source", "translation", "alternatives", "breakdown", "notes"],
+    "properties": {
+        "source": {"type": "string", "minLength": 1, "maxLength": 1000},
+        "translation": {"type": "string", "minLength": 1, "maxLength": 1000},
+        "alternatives": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["text", "nuance"],
+                "properties": {
+                    "text": {"type": "string", "minLength": 1, "maxLength": 1000},
+                    "nuance": {"type": ["string", "null"], "maxLength": 500},
+                },
+            },
+        },
+        "breakdown": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["target", "source"],
+                "properties": {
+                    "target": {"type": "string", "minLength": 1, "maxLength": 500},
+                    "source": {"type": "string", "minLength": 1, "maxLength": 500},
+                    "note": {"type": ["string", "null"], "maxLength": 500},
+                },
+            },
+        },
+        "notes": {"type": "string", "minLength": 1, "maxLength": 1000},
+    },
+}
+
+TRANSLATE_SCHEMA: dict = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["sentences", "notes"],
+    "properties": {
+        "sentences": {
+            "type": "array",
+            "minItems": 1,
+            "items": TRANSLATE_SENTENCE_ITEM,
+        },
+        "notes": {"type": "string", "minLength": 1, "maxLength": 1500},
+        "notes_primary": {"type": ["string", "null"], "maxLength": 1000},
+        "notes_secondary": {"type": ["string", "null"], "maxLength": 1000},
+    },
+}
+
+
+TRANSLATE_TIMEOUT_SECONDS: int = int(
+    os.environ.get("LLM_TRANSLATE_TIMEOUT_SECONDS", "600")
+)
+
+
+def _build_translate_user_prompt(
+    *, target_lang: str, text: str,
+    target_name: str,
+    primary_name: str, secondary_name: str,
+    keep_primary: bool, keep_secondary: bool,
+) -> str:
+    parts: list[str] = [
+        f"Target language (the one being learned): {target_name} ({target_lang}).",
+        "The user's input may be in any language; detect it yourself.",
+        "User input:",
+        text,
+        "",
+        "Split the input into sentences. Produce one entry per sentence in",
+        "`sentences`, in input order. Each entry has:",
+        f"- `source`: the sentence lifted verbatim from the input.",
+        f"- `translation`: a natural, grammatical rendering of that sentence",
+        f"  in {target_name}. Translate the meaning, not word-for-word.",
+        f"- `alternatives`: 2-3 other natural ways to say the SAME sentence",
+        f"  in {target_name}. Each is an object with `text` (the alternative",
+        f"  sentence) and `nuance` (a short note in {target_name} on how the",
+        f"  register, word choice, or tone differs from `translation`). If",
+        f"  there's only one good way, return a single item with a null",
+        f"  `nuance`. Order most natural first.",
+        f"- `breakdown`: a word-by-word / phrase-by-phrase gloss for THIS",
+        f"  sentence. `target` is a phrase or word lifted from this",
+        f"  sentence's `translation`; `source` is the matching phrase in the",
+        f"  original language; `note` is an optional short grammar/usage",
+        f"  gloss in {target_name} (may be null). Cover the whole sentence;",
+        f"  order matches the translation's left-to-right flow.",
+        f"- `notes`: a short paragraph in {target_name} pointing out one or",
+        f"  two constructions, particles, or word choices a learner of",
+        f"  {target_name} should notice in THIS sentence. 1-3 sentences.",
+        "",
+        f"Top-level `notes`: a short paragraph in {target_name} summarizing",
+        f"the patterns worth remembering across the whole input. 2-4",
+        f"sentences. If the input is a single sentence, this can overlap",
+        f"with that sentence's `notes`.",
+        "",
+        f"Every `translation`, `alternatives[].text`, `breakdown[].target`,",
+        f"per-sentence `notes`, and the top-level `notes` must be in",
+        f"{target_name}. `source` and `breakdown[].source` must be in the",
+        f"original language of the input.",
+    ]
+    if keep_primary:
+        parts.append(
+            f"Also include `notes_primary`: a short translation of the"
+            f" top-level `notes` for a reader who doesn't speak"
+            f" {target_name}, written in {primary_name}."
+        )
+    else:
+        parts.append(
+            f"Do NOT include `notes_primary`: {target_name} already shows"
+            f" the notes."
+        )
+    if keep_secondary:
+        parts.append(
+            f"Also include `notes_secondary` in {secondary_name}."
+        )
+    else:
+        parts.append("Do NOT include `notes_secondary`.")
+    parts.append(
+        "Return ONLY a JSON object matching the schema. No prose, no code fences."
+    )
+    return "\n".join(parts)
+
+
+def _normalize_translate_alt(item: dict) -> None:
+    """Repair one alternative object. Aliases: `alternative` / `phrase` /
+    `sentence` -> `text`; `why` / `note` / `comment` / `difference` ->
+    `nuance`. Unknown keys dropped. `nuance` defaults to null."""
+    if not isinstance(item, dict):
+        return
+    if "text" not in item:
+        for alias in ("alternative", "phrase", "sentence", "option", "value"):
+            if alias in item:
+                item["text"] = item.pop(alias)
+                break
+    if "nuance" not in item:
+        for alias in ("why", "note", "comment", "difference", "reason", "gloss"):
+            if alias in item:
+                item["nuance"] = item.pop(alias)
+                break
+    for key in list(item):
+        if key not in ("text", "nuance"):
+            item.pop(key, None)
+    if not isinstance(item.get("text"), str):
+        item["text"] = "" if item.get("text") is None else str(item["text"])
+    if not isinstance(item.get("nuance"), str):
+        item["nuance"] = None if item.get("nuance") is None else str(item["nuance"])
+
+
+def _normalize_translate_breakdown_item(item: dict) -> None:
+    """Repair one breakdown object. Aliases: `to` / `target_phrase` ->
+    `target`; `from` / `source_phrase` -> `source`; `comment` / `gloss`
+    -> `note`. Unknown keys dropped."""
+    if not isinstance(item, dict):
+        return
+    if "target" not in item:
+        for alias in ("to", "target_phrase", "target_text", "phrase"):
+            if alias in item:
+                item["target"] = item.pop(alias)
+                break
+    if "source" not in item:
+        for alias in ("from", "source_phrase", "source_text", "meaning"):
+            if alias in item:
+                item["source"] = item.pop(alias)
+                break
+    if "note" not in item:
+        for alias in ("comment", "gloss", "explanation", "usage"):
+            if alias in item:
+                item["note"] = item.pop(alias)
+                break
+    for key in list(item):
+        if key not in ("target", "source", "note"):
+            item.pop(key, None)
+    if not isinstance(item.get("note"), str):
+        item["note"] = None if item.get("note") is None else str(item["note"])
+
+
+def _normalize_translate_sentence(item: dict) -> None:
+    """Repair one sentence object in place. Coerce `alternatives` from a
+    list of strings into objects with null `nuance`, and run the per-item
+    normalizers. Unknown keys dropped."""
+    if not isinstance(item, dict):
+        return
+    if "source" not in item:
+        for alias in ("original", "input", "input_sentence"):
+            if alias in item:
+                item["source"] = item.pop(alias)
+                break
+    if "translation" not in item:
+        for alias in ("translated", "result", "target_sentence"):
+            if alias in item:
+                item["translation"] = item.pop(alias)
+                break
+    alts = item.get("alternatives")
+    if alts is None:
+        for alias in ("options", "variants", "alternative", "alt"):
+            if alias in item:
+                alts = item.pop(alias)
+                break
+    if isinstance(alts, str):
+        alts = [alts]
+    if isinstance(alts, list):
+        fixed = []
+        for a in alts:
+            if isinstance(a, str):
+                fixed.append({"text": a, "nuance": None})
+            elif isinstance(a, dict):
+                _normalize_translate_alt(a)
+                fixed.append(a)
+        item["alternatives"] = fixed
+    else:
+        item["alternatives"] = []
+    breakdown = item.get("breakdown")
+    if breakdown is None:
+        for alias in ("gloss", "segments", "tokens"):
+            if alias in item:
+                breakdown = item.pop(alias)
+                break
+    if isinstance(breakdown, list):
+        for b in breakdown:
+            _normalize_translate_breakdown_item(b)
+        item["breakdown"] = breakdown
+    else:
+        item["breakdown"] = []
+    if "notes" not in item or not isinstance(item.get("notes"), str):
+        for alias in ("note", "explanation", "comment"):
+            if alias in item:
+                item["notes"] = item.pop(alias)
+                break
+    for key in list(item):
+        if key not in ("source", "translation", "alternatives",
+                       "breakdown", "notes"):
+            item.pop(key, None)
+
+
+def _normalize_translate(data: dict) -> dict:
+    """Repair common field-name variants non-OpenAI models produce for
+    the translate schema. Must never raise: runs before strict validation
+    on every attempt.
+
+    - `sentences` may arrive as `sentence` / `items` / `results`.
+    - legacy flat shape (top-level `translation`/`alternatives`/`breakdown`)
+      is promoted into a single-element `sentences` array. The sentence's
+      `source` is filled from ``_TRANSLATE_SOURCE_TEXT`` (set per call by
+      :func:`translate_text_via_llm`) since the flat shape has no source.
+    - per-sentence, per-alternative, and per-breakdown aliases handled
+      by the helper normalizers above.
+    - unknown top-level keys dropped.
+    """
+    if "sentences" not in data:
+        for alias in ("sentence", "items", "results", "blocks"):
+            if alias in data and isinstance(data[alias], list):
+                data["sentences"] = data.pop(alias)
+                break
+    # Promote a legacy flat response into a single sentence block.
+    if "sentences" not in data and isinstance(data.get("translation"), str):
+        source_text = _TRANSLATE_SOURCE_TEXT or ""
+        block = {
+            "source": data.get("source") or data.get("original") or source_text,
+            "translation": data.pop("translation"),
+            "alternatives": data.get("alternatives") or [],
+            "breakdown": data.get("breakdown") or [],
+            "notes": data.get("notes") or "",
+        }
+        data["sentences"] = [block]
+        data.pop("alternatives", None)
+        data.pop("breakdown", None)
+        # Keep top-level notes if present; otherwise reuse the block's.
+        if not data.get("notes"):
+            data["notes"] = block["notes"]
+    for key in list(data):
+        if key not in ("sentences", "notes",
+                       "notes_primary", "notes_secondary"):
+            data.pop(key, None)
+    sentences = data.get("sentences")
+    if isinstance(sentences, list):
+        for s in sentences:
+            _normalize_translate_sentence(s)
+    return data
+
+
+# Per-call stash of the user's input text. ``_normalize_translate`` reads
+# this to backfill `source` when a model returns the legacy flat shape
+# (which has no source field). Set by ``translate_text_via_llm`` via a
+# closure-built wrapper; defaults to empty outside a translate call.
+_TRANSLATE_SOURCE_TEXT: str = ""
+
+
+def translate_text_via_llm(
+    *, target_lang: str, text: str,
+    primary: str | None = None,
+    secondary: str | None = None,
+) -> dict:
+    """Ask the LLM to translate ``text`` (in any source language, auto-
+    detected by the model) into ``target_lang`` (the language being
+    learned) and produce a per-sentence teaching breakdown. Returns the
+    parsed dict matching :data:`TRANSLATE_SCHEMA`: ``{sentences, notes,
+    notes_primary?, notes_secondary?}`` where each sentence carries its
+    own ``translation``, ``alternatives`` (with nuance), ``breakdown``,
+    and ``notes``.
+
+    The explanation-language rules apply to ``notes_primary`` /
+    ``notes_secondary`` (see :data:`_should_generate_primary`): primary
+    is skipped when the target language equals it, secondary is skipped
+    when it would be redundant with primary or is unset.
+
+    Raises :class:`LLMError` on network or schema failures.
+    """
+    if not isinstance(text, str) or not text.strip():
+        raise ValueError("text required")
+    text = text.strip()
+    if len(text) > 4000:
+        text = text[:4000]
+    keep_primary = _should_generate_primary(target_lang, primary)
+    keep_secondary = _should_generate_secondary(primary, secondary)
+    target_name = _lang_name(target_lang)
+    primary_name = _lang_name(primary) if primary else ""
+    secondary_name = _lang_name(secondary) if secondary else ""
+
+    script_note = ""
+    if "zh" in (target_lang, primary, secondary):
+        script_note = " For Chinese content, use Traditional Chinese characters."
+
+    system = (
+        "You are a language tutor. Translate the user's text into the "
+        "target language and break it down so a learner can follow. "
+        "Return ONLY a JSON object matching the schema. No prose, "
+        "no code fences."
+        + script_note
+    )
+    user = _build_translate_user_prompt(
+        target_lang=target_lang, text=text,
+        target_name=target_name,
+        primary_name=primary_name, secondary_name=secondary_name,
+        keep_primary=keep_primary, keep_secondary=keep_secondary,
+    )
+    # Stash the source text so the normalizer can backfill `source` on
+    # a legacy flat response. Set/restore around the LLM call so a
+    # concurrent call (none in v1 — single user, blocking) still sees a
+    # sensible value.
+    global _TRANSLATE_SOURCE_TEXT
+    prev_source = _TRANSLATE_SOURCE_TEXT
+    _TRANSLATE_SOURCE_TEXT = text
+    try:
+        data = complete_json(
+            schema=TRANSLATE_SCHEMA,
+            schema_name="translate_text",
+            system=system,
+            user=user,
+            temperature=0.3,
+            max_retries=0,
+            normalize=_normalize_translate,
+            timeout=TRANSLATE_TIMEOUT_SECONDS,
+        )
+    finally:
+        _TRANSLATE_SOURCE_TEXT = prev_source
+    # Post-process notes_primary/notes_secondary with the shared rules.
+    # apply_explanation_rules handles a single fill-shaped object that
+    # carries explanation_primary / explanation_secondary at the top
+    # level, so temporarily rename our notes_* fields to the expected
+    # keys, run the pass, then rename back. This keeps one rules engine
+    # instead of a parallel one for translate.
+    if "notes_primary" in data:
+        data["explanation_primary"] = data.pop("notes_primary")
+    if "notes_secondary" in data:
+        data["explanation_secondary"] = data.pop("notes_secondary")
+    apply_explanation_rules(
+        data, lang=target_lang, primary=primary, secondary=secondary,
+    )
+    if "explanation_primary" in data:
+        data["notes_primary"] = data.pop("explanation_primary")
+    if "explanation_secondary" in data:
+        data["notes_secondary"] = data.pop("explanation_secondary")
+    return data
+
+
 #
 # "Apply explanations" is the per-language translation pass: load
 # existing target-language structures and phrases, ask the LLM to fill

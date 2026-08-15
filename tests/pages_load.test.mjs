@@ -43,6 +43,7 @@ const dom = new JSDOM(
      <div id="vocab-list"></div>
      <div id="analyze-result"></div>
      <div id="refine-result"></div>
+     <div id="translate-result"></div>
    </body></html>`,
   { url: "http://localhost:5056/#/dictionary" }
 );
@@ -101,6 +102,7 @@ const PAGES = [
   { hash: "#/phrases",     mod: "../frontend/static/js/pages/phrases.js",     render: "renderPhrases" },
   { hash: "#/analyze",     mod: "../frontend/static/js/pages/analyze.js",     render: "renderAnalyze" },
   { hash: "#/refine",      mod: "../frontend/static/js/pages/refine.js",      render: "renderRefine" },
+  { hash: "#/translate",   mod: "../frontend/static/js/pages/translate.js",   render: "renderTranslate" },
   { hash: "#/settings",    mod: "../frontend/static/js/pages/settings.js",    render: "renderSettings" },
   { hash: "#/dictionary",  mod: "../frontend/static/js/pages/dictionary.js",  render: "renderDictionary" },
 ];

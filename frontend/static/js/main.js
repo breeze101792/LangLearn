@@ -2,6 +2,7 @@
 
 import { api, setUnauthorizedHandler } from "./api.js";
 import { store } from "./state.js";
+import { clearUserData } from "./clear-cache.js";
 import { renderNavLinks } from "./components/nav-links.js";
 import { renderNavDrawer } from "./components/nav-drawer.js";
 import { renderLangSwitcher } from "./components/lang-switcher.js";
@@ -18,6 +19,7 @@ async function boot() {
   bindContextMenu();
 
   setUnauthorizedHandler(() => {
+    clearUserData();
     window.location.replace("/");
   });
 
@@ -59,6 +61,7 @@ function bindLogout() {
   btn.addEventListener("click", async () => {
     btn.disabled = true;
     await api.post("/api/auth/logout");
+    clearUserData();
     window.location.replace("/");
   });
   nav.appendChild(btn);
@@ -94,6 +97,7 @@ const PAGES = [
   { hash: "#/phrases",     load: () => import("./pages/phrases.js") },
   { hash: "#/analyze",     load: () => import("./pages/analyze.js") },
   { hash: "#/refine",      load: () => import("./pages/refine.js") },
+  { hash: "#/translate",   load: () => import("./pages/translate.js") },
   { hash: "#/settings",    load: () => import("./pages/settings.js") },
   { hash: "#/dictionary",  load: () => import("./pages/dictionary.js") },
 ];
@@ -155,6 +159,7 @@ function pickRenderFn(mod, hash) {
   if (hash === "#/phrases") return mod.renderPhrases;
   if (hash === "#/analyze") return mod.renderAnalyze;
   if (hash === "#/refine") return mod.renderRefine;
+  if (hash === "#/translate") return mod.renderTranslate;
   if (hash === "#/settings") return mod.renderSettings;
   return mod.renderDictionary;
 }

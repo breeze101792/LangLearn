@@ -58,12 +58,14 @@ def test_nav_links_includes_analyze_and_refine():
     labels = _route_block(_load(NAV_LINKS_JS))
     assert "Analyze" in labels, f"Analyze missing from {NAV_LINKS_JS}: {labels}"
     assert "Refine" in labels, f"Refine missing from {NAV_LINKS_JS}: {labels}"
+    assert "Translate" in labels, f"Translate missing from {NAV_LINKS_JS}: {labels}"
 
 
 def test_nav_drawer_includes_analyze_and_refine():
     labels = _route_block(_load(NAV_DRAWER_JS))
     assert "Analyze" in labels, f"Analyze missing from {NAV_DRAWER_JS}: {labels}"
     assert "Refine" in labels, f"Refine missing from {NAV_DRAWER_JS}: {labels}"
+    assert "Translate" in labels, f"Translate missing from {NAV_DRAWER_JS}: {labels}"
 
 
 def _index_of(labels: list[str], target: str) -> int:
@@ -76,21 +78,26 @@ def _index_of(labels: list[str], target: str) -> int:
 
 
 @pytest.mark.parametrize("nav_path", [NAV_LINKS_JS, NAV_DRAWER_JS])
-def test_analyze_and_refine_appear_after_dictionary(nav_path: Path):
-    """Both nav sources must put Analyze and Refine right after
-    Dictionary. The user explicitly asked for this ordering; a future
-    shuffle that moves them to the bottom (e.g. alongside Settings) is
-    exactly the regression we want to catch."""
+def test_analyze_refine_translate_appear_after_dictionary(nav_path: Path):
+    """Analyze, Refine, and Translate must sit right after Dictionary.
+    The user explicitly asked for this ordering; a future shuffle that
+    moves them to the bottom (e.g. alongside Settings) is exactly the
+    regression we want to catch."""
     labels = _route_block(_load(nav_path))
     i_dict = _index_of(labels, "Dictionary")
     i_analyze = _index_of(labels, "Analyze")
     i_refine = _index_of(labels, "Refine")
+    i_translate = _index_of(labels, "Translate")
     assert i_analyze == i_dict + 1, (
         f"Analyze should sit directly after Dictionary in {nav_path.name}, "
         f"got order: {labels}"
     )
     assert i_refine == i_dict + 2, (
         f"Refine should sit directly after Analyze in {nav_path.name}, "
+        f"got order: {labels}"
+    )
+    assert i_translate == i_dict + 3, (
+        f"Translate should sit directly after Refine in {nav_path.name}, "
         f"got order: {labels}"
     )
 

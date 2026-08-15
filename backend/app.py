@@ -50,8 +50,20 @@ def create_app() -> Flask:
     @app.get("/")
     def index():
         if auth_gate.is_auth_enabled() and not auth_gate.is_authenticated():
-            return send_from_directory(config.TEMPLATES_DIR, "login.html")
-        return send_from_directory(config.TEMPLATES_DIR, "index.html")
+            resp = send_from_directory(config.TEMPLATES_DIR, "login.html")
+            # The shell page must always re-check the server. If we let the
+            # browser cache an old index.html from before auth was enabled,
+            # the user sees a broken SPA with no password prompt.
+            resp.headers["Cache-Control"] = "no-store, must-revalidate"
+            resp.headers["Pragma"] = "no-cache"
+            return resp
+        resp = send_from_directory(config.TEMPLATES_DIR, "index.html")
+        # Same reasoning for the authenticated shell — never cache it, so a
+        # future password change can't trap an unauthenticated browser in a
+        # cached SPA.
+        resp.headers["Cache-Control"] = "no-store, must-revalidate"
+        resp.headers["Pragma"] = "no-cache"
+        return resp
 
     @app.get("/manifest.json")
     def manifest():
@@ -93,6 +105,7 @@ def _register_blueprints(app: Flask) -> None:
     from .blueprints.transfer import bp as transfer_bp
     from .blueprints.analyze import bp as analyze_bp
     from .blueprints.refine import bp as refine_bp
+    from .blueprints.translate import bp as translate_bp
 
     app.register_blueprint(auth_bp)
     app.register_blueprint(settings_bp)
@@ -105,6 +118,7 @@ def _register_blueprints(app: Flask) -> None:
     app.register_blueprint(transfer_bp)
     app.register_blueprint(analyze_bp)
     app.register_blueprint(refine_bp)
+    app.register_blueprint(translate_bp)
 
 
 def _register_auth_gate(app: Flask) -> None:
