@@ -926,6 +926,136 @@ body.nav-drawer-open { overflow: hidden; }
   }
 }
 
+/* TTS popup: floating audio player triggered from the right-click menu.
+   Mirrors the dict-popup shell so the two popups feel like siblings. */
+.tts-popup {
+  position: fixed;
+  top: var(--sp-4);
+  right: var(--sp-4);
+  z-index: 95;
+  width: min(360px, calc(100vw - var(--sp-8)));
+  max-height: calc(100vh - var(--sp-8));
+  display: none;
+  flex-direction: column;
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-2);
+  overflow: hidden;
+}
+.tts-popup--open {
+  display: flex;
+  animation: dict-popup-in var(--dur-2) var(--ease);
+}
+.tts-popup--dragging { animation: none; opacity: 0.95; }
+.tts-popup__chrome {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: var(--sp-2) var(--sp-3);
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
+}
+.tts-popup__chrome:active { cursor: grabbing; }
+.tts-popup__chrome > .tts-popup__close { cursor: pointer; }
+.tts-popup__title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.tts-popup__close {
+  background: transparent;
+  border: none;
+  font-size: 22px;
+  line-height: 1;
+  padding: 0 var(--sp-2);
+  border-radius: var(--r-sm);
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.tts-popup__close:hover,
+.tts-popup__close:focus-visible {
+  background: var(--surface-sunken);
+  color: var(--text-primary);
+  outline: none;
+}
+.tts-popup__body {
+  padding: var(--sp-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  overflow: auto;
+}
+.tts-popup__text {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 500;
+  line-height: 1.4;
+  color: var(--text-primary);
+  word-break: break-word;
+}
+.tts-popup__note {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  padding: var(--sp-2) var(--sp-3);
+  background: var(--surface-sunken);
+  border-radius: var(--r-sm);
+}
+.tts-popup__controls {
+  display: flex;
+  gap: var(--sp-2);
+}
+.tts-popup__controls .btn { flex: 1; }
+.tts-popup__speed {
+  display: flex;
+  gap: var(--sp-1);
+  padding: var(--sp-1);
+  background: var(--surface-sunken);
+  border-radius: var(--r-md);
+}
+.tts-popup__speed-btn {
+  flex: 1;
+  background: transparent;
+  border: none;
+  padding: var(--sp-2);
+  border-radius: var(--r-sm);
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background var(--dur-1) var(--ease),
+              color var(--dur-1) var(--ease);
+}
+.tts-popup__speed-btn:hover {
+  background: var(--surface-raised);
+  color: var(--text-primary);
+}
+.tts-popup__speed-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.tts-popup__speed-btn--active {
+  background: var(--surface-raised);
+  color: var(--accent-text);
+  box-shadow: var(--shadow-1);
+}
+@media (max-width: 600px) {
+  .tts-popup {
+    top: auto;
+    bottom: var(--sp-4);
+    left: var(--sp-4);
+    right: var(--sp-4);
+    width: auto;
+  }
+}
+
 /* Transfer page (export / import) */
 .transfer-tabs {
   display: flex;

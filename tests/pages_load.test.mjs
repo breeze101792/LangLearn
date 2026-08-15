@@ -15,7 +15,7 @@
 //
 // Exits 0 on pass, 1 on first failure.
 
-import { JSDOM } from "/mnt/projects/webapp/notebook-server/node_modules/jsdom/lib/api.js";
+import { JSDOM } from "jsdom";
 
 // One DOM shared across all page render calls so listeners and IDs
 // accumulate like they would in a real browser environment.

@@ -17,6 +17,7 @@
 // menu through untouched.
 
 import { openDictPopup } from "./dict-popup.js";
+import { openTtsPopup } from "./tts-popup.js";
 import { store } from "../state.js";
 
 let menuEl = null;
@@ -133,6 +134,22 @@ function show(x, y, word, hasSelection) {
 
   // Divider between clipboard actions and the lookup action.
   menuEl.appendChild(makeDivider());
+
+  // Speak "<text>": floating TTS popup with playback controls. Acts on
+  // the same selection/word resolution as the dictionary lookups, so
+  // it can read back either a phrase the user highlighted or a single
+  // word they right-clicked.
+  const speakBtn = document.createElement("button");
+  speakBtn.type = "button";
+  speakBtn.className = "ctx-menu__item";
+  speakBtn.setAttribute("role", "menuitem");
+  speakBtn.textContent = `Speak "${truncate(word, 24)}"`;
+  speakBtn.addEventListener("click", () => {
+    const target = word;
+    hide();
+    openTtsPopup({ word: target });
+  });
+  menuEl.appendChild(speakBtn);
 
   // Lookup "<word>": popup dictionary.
   const lookupBtn = document.createElement("button");

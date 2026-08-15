@@ -18,6 +18,9 @@ Thumbs.db
 
 # Editor
 .vscode/
+
+# Node
+node_modules/
 .idea/
 
 # Logs

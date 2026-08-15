@@ -25,11 +25,34 @@ from .. import config
 from ..services import settings as settings_svc
 from ..services.tts import registry as tts_registry
 from ..services.tts.base import TTSAudioError
-from ..util import err, is_known_lang, is_word, normalize_word, ok
+from ..util import err, is_known_lang, normalize_word, ok
 
 log = logging.getLogger(__name__)
 
 bp = Blueprint("tts", __name__, url_prefix="/api/tts")
+
+# TTS accepts full sentences (with punctuation) up to this length.
+# The dictionary validator (is_word) stays strict for WordNet
+# lookups; this is the looser equivalent for the right-click
+# "speak this selection" flow. 200 chars matches Google TTS's
+# practical limit before audio quality degrades.
+import re as _re
+_TTS_PHRASE_RE = _re.compile(
+    r"^[\w\s'\"\-\.,;:!\?—–\(\)…\u00BB\u00AB]+$",
+    _re.UNICODE,
+)
+_MAX_TTS_CHARS = 200
+
+
+def _is_speakable_phrase(value: object) -> bool:
+    """A TTS phrase: letters, numbers, whitespace, common sentence
+    punctuation. Up to 200 chars."""
+    if not isinstance(value, str):
+        return False
+    v = value.strip()
+    if not v or len(v) > _MAX_TTS_CHARS:
+        return False
+    return bool(_TTS_PHRASE_RE.match(v))
 
 
 @bp.get("/providers")
@@ -45,11 +68,20 @@ def audio():
     word = request.args.get("word", "")
     if not isinstance(lang, str) or not is_known_lang(lang):
         return jsonify(err("invalid language", code="invalid_lang")), 400
-    if not isinstance(word, str) or not is_word(word):
-        return jsonify(err("word must be 1-200 chars of letters", code="invalid_word")), 400
+    # TTS accepts full sentences with punctuation; the dictionary
+    # validator (is_word) is stricter because WordNet only has lemma
+    # entries. _is_speakable_phrase is the looser TTS equivalent.
+    if not isinstance(word, str) or not _is_speakable_phrase(word):
+        return jsonify(err(
+            "phrase must be 1-200 chars of letters, numbers, or sentence punctuation",
+            code="invalid_phrase",
+        )), 400
     word = normalize_word(word)
     if not word:
-        return jsonify(err("word must be 1-200 chars of letters", code="invalid_word")), 400
+        return jsonify(err(
+            "phrase must be 1-200 chars of letters, numbers, or sentence punctuation",
+            code="invalid_phrase",
+        )), 400
 
     # The TTS provider choice is a per-user setting; resolve here so a
     # mid-session change takes effect on the next click.
@@ -60,7 +92,10 @@ def audio():
     # stored with underscores after `normalize_word`. Split those back out.
     text = word.replace("_", " ").strip()
     if not text:
-        return jsonify(err("word must be 1-200 chars of letters", code="invalid_word")), 400
+        return jsonify(err(
+            "phrase must be 1-200 chars of letters, numbers, or sentence punctuation",
+            code="invalid_phrase",
+        )), 400
 
     cache_path = _cache_path(lang, word, provider_name)
     cached = _read_cache(cache_path)
