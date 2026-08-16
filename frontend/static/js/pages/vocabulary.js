@@ -82,6 +82,14 @@ export function renderVocabulary(host) {
   });
 
   list.addEventListener("click", (e) => {
+    const wordLink = e.target.closest("a.vocab-word");
+    if (wordLink) {
+      // Hand the word to the Dictionary page so it pre-fills the search
+      // box and runs the lookup on mount. The page consumes and clears
+      // pendingDictionaryWord, so this is a clean one-shot handoff.
+      store.set({ pendingDictionaryWord: wordLink.dataset.word });
+      return;
+    }
     const prev = e.target.closest("button[data-pager='prev']");
     if (prev && !prev.disabled) { offset = Math.max(0, offset - pageSize); load(); return; }
     const next = e.target.closest("button[data-pager='next']");
@@ -188,7 +196,7 @@ export function renderVocabulary(host) {
     return `
       <article class="list-item" data-id="${item.id}">
         <div class="list-item__badges">${sourceBadge}${pos}<span class="badge badge--muted">${escapeHtml(BOX_LABELS[box])}</span></div>
-      <div class="list-item__main"><strong>${escapeHtml(wordDisplay)}</strong>
+      <div class="list-item__main"><strong><a href="#/dictionary" class="vocab-word" data-word="${escapeHtml(wordDisplay)}" data-lang="${escapeHtml(item.language)}" title="Look up in Dictionary">${escapeHtml(wordDisplay)}</a></strong>
         <button type="button" class="word-card__speak" data-action="speak" data-word="${escapeHtml(wordDisplay)}" data-lang="${escapeHtml(item.language)}" aria-label="Pronounce ${escapeHtml(wordDisplay)}" title="Pronounce ${escapeHtml(wordDisplay)}">🔊</button>
       </div>
       ${item.glossary ? `<div class="list-item__meta">${escapeHtml(item.glossary)}</div>` : ""}
