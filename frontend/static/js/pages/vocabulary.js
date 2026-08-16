@@ -32,7 +32,7 @@ export function renderVocabulary(host) {
     </header>
     <section class="row" style="margin-bottom: var(--sp-3)">
       <div class="segmented" id="box-segments" role="tablist" aria-label="Memory level filter">
-        <button class="segmented__item is-active" data-box="" role="tab" aria-selected="true">All</button>
+        <button class="segmented__item segmented__item--active" data-box="" role="tab" aria-selected="true">All</button>
         ${[1, 2, 3, 4, 5].map((b) =>
           `<button class="segmented__item" data-box="${b}" role="tab" aria-selected="false">${escapeHtml(BOX_LABELS[b])} <span class="badge badge--muted" data-count="${b}">0</span></button>`
         ).join("")}
@@ -61,7 +61,7 @@ export function renderVocabulary(host) {
     if (activeBox) {
       segments.querySelectorAll("button.segmented__item").forEach((b) => {
         const on = (b.dataset.box || "") === activeBox;
-        b.classList.toggle("is-active", on);
+        b.classList.toggle("segmented__item--active", on);
         b.setAttribute("aria-selected", on ? "true" : "false");
       });
     }
@@ -74,7 +74,7 @@ export function renderVocabulary(host) {
     offset = 0;
     segments.querySelectorAll("button.segmented__item").forEach((b) => {
       const on = (b === btn);
-      b.classList.toggle("is-active", on);
+      b.classList.toggle("segmented__item--active", on);
       b.setAttribute("aria-selected", on ? "true" : "false");
     });
     load();

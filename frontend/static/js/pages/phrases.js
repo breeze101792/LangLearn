@@ -136,7 +136,7 @@ function renderListPage({ host, title, kind, endpoint, fillEndpoint, emptyMsg, e
     </header>
     <section class="row row--between" style="margin-bottom: var(--sp-3); align-items: center; gap: var(--sp-3)">
       <div class="segmented" id="familiar-segments" role="tablist" aria-label="Familiarity filter">
-        <button class="segmented__item is-active" data-familiar="0" role="tab" aria-selected="true">Unfamiliar</button>
+        <button class="segmented__item segmented__item--active" data-familiar="0" role="tab" aria-selected="true">Unfamiliar</button>
         <button class="segmented__item" data-familiar="1" role="tab" aria-selected="false">Familiar</button>
       </div>
       <button id="add-toggle" class="btn btn--primary">+ Add</button>
@@ -165,7 +165,7 @@ function renderListPage({ host, title, kind, endpoint, fillEndpoint, emptyMsg, e
       viewFamiliar = restored.viewFamiliar;
       host.querySelectorAll("#familiar-segments .segmented__item").forEach((b) => {
         const on = (b.dataset.familiar === "1") === viewFamiliar;
-        b.classList.toggle("is-active", on);
+        b.classList.toggle("segmented__item--active", on);
         b.setAttribute("aria-selected", on ? "true" : "false");
       });
     }
@@ -197,7 +197,7 @@ function renderListPage({ host, title, kind, endpoint, fillEndpoint, emptyMsg, e
     offset = 0;
     host.querySelectorAll("#familiar-segments .segmented__item").forEach((b) => {
       const on = b === btn;
-      b.classList.toggle("is-active", on);
+      b.classList.toggle("segmented__item--active", on);
       b.setAttribute("aria-selected", on ? "true" : "false");
     });
     load();
