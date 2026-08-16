@@ -155,22 +155,20 @@ DICT_WORD_SCHEMA: dict = {
     "properties": {
         "senses": {
             "type": "array",
-            "minItems": 1,
             "items": {
                 "type": "object",
                 "additionalProperties": False,
                 "required": ["pos", "definitions"],
                 "properties": {
-                    "pos": {"type": "string", "maxLength": 32},
+                    "pos": {"type": ["string", "null"], "maxLength": 32},
                     "definitions": {
                         "type": "array",
-                        "minItems": 1,
                         "items": {
                             "type": "object",
                             "additionalProperties": False,
                             "required": ["glossary"],
                             "properties": {
-                                "glossary": {"type": "string", "minLength": 1, "maxLength": 1000},
+                                "glossary": {"type": ["string", "null"], "maxLength": 1000},
                                 "example": {"type": ["string", "null"], "maxLength": 1000},
                             },
                         },
@@ -474,66 +472,150 @@ def _normalize_dict_word(data: dict) -> dict:
     Must never raise: it runs before validation on every attempt."""
     senses = data.get("senses")
     if not isinstance(senses, list):
+        # Some models return a single flat sense object at the top level
+        # ({"pos": ..., "definitions": [...], "explanations": {...}})
+        # instead of wrapping it in {"senses": [...]}. Promote that shape
+        # so strict validation passes.
+        if isinstance(data, dict) and any(
+            k in data for k in ("pos", "definitions", "glosses", "meanings")
+        ):
+            return {"senses": [_normalize_dict_sense(data)]}
         return data
-    for sense in senses:
-        if not isinstance(sense, dict):
+    return {"senses": [_normalize_dict_sense(s) for s in senses]}
+
+
+def _normalize_dict_sense(sense: dict) -> dict:
+    """Normalize one sense dict to the canonical ``dict_word`` shape.
+    Must never raise: it runs before validation on every attempt."""
+    if not isinstance(sense, dict):
+        return {}
+    pos = sense.pop("part_of_speech", None)
+    if pos is None:
+        pos = sense.pop("pos", None)
+    # Always emit `pos` (null when absent): strict mode requires the
+    # key to be present, and the provider defaults a null pos to "—".
+    sense["pos"] = pos
+    defs = sense.pop("definitions", None)
+    if defs is None:
+        defs = sense.pop("glosses", None)
+    if defs is None:
+        defs = sense.pop("meanings", None)
+    # Some models emit a flat sense like
+    # {"pos": "...", "definition": "...", "example": "..."} instead
+    # of nesting the gloss into a `definitions` array. Promote that
+    # shape so it matches the strict schema. Any leftover `example`
+    # key with no gloss is dropped — the schema requires glossary
+    # to be a non-empty string.
+    if not defs:
+        flat_def = sense.pop("definition", None)
+        flat_ex = sense.pop("example", None)
+        if flat_def is not None:
+            defs = [{"glossary": flat_def}]
+            if flat_ex is not None:
+                defs[0]["example"] = flat_ex
+        else:
+            sense.pop("example", None)
+    if defs is not None:
+        sense["definitions"] = defs
+    if isinstance(defs, list):
+        for d in defs:
+            if not isinstance(d, dict):
+                continue
+            if "glossary" not in d:
+                text = d.pop("text", None)
+                if text is None:
+                    text = d.pop("translation", None)
+                if text is not None:
+                    d["glossary"] = text
+            # Always emit `glossary` (null when absent): strict mode
+            # requires the key, and the provider drops null-glossary
+            # definitions during salvage.
+            if "glossary" not in d:
+                d["glossary"] = None
+            if "example" not in d:
+                for alias in ("sentence", "usage_example", "usage"):
+                    if alias in d:
+                        d["example"] = d.pop(alias)
+                        break
+            for key in list(d):
+                if key not in ("glossary", "example"):
+                    d.pop(key, None)
+    explanations = sense.get("explanations")
+    if isinstance(explanations, dict):
+        for key in list(explanations):
+            if key not in ("primary", "secondary"):
+                explanations.pop(key, None)
+    sense.pop("glosses", None)
+    sense.pop("meanings", None)
+    for key in list(sense):
+        if key not in ("pos", "definitions", "explanations"):
+            sense.pop(key, None)
+    return sense
+
+
+# Keys the seed schemas actually allow on each item. Anything else the
+# model emits (e.g. `pattern` on a phrase item, `literal_translation`,
+# `items`, `id`) is dropped before strict validation. The post-hoc
+# ``apply_explanation_rules`` pass in seed.py decides whether
+# explanation_primary/secondary survive, so the normalizer only has to
+# keep them around as strings-or-null.
+_SEED_STRUCTURE_KEYS = {"pattern", "example_sentence",
+                        "explanation", "explanation_primary",
+                        "explanation_secondary"}
+_SEED_PHRASE_KEYS = {"phrase", "example_sentence",
+                     "explanation", "explanation_primary",
+                     "explanation_secondary"}
+
+
+def _normalize_seed_batch(data: Any, *, array_name: str) -> dict:
+    """Repair common shape deviations non-OpenAI models produce for the
+    per-batch seed schema (``{"structures": [...]}`` or ``{"phrases":
+    [...]}``) before strict validation. Specifically:
+
+    * The model returns a bare JSON array ``[...]`` instead of the
+      expected wrapper object — wrap it as ``{array_name: [...]}``.
+    * The model nests one level too deep (``{"items": [...]}`` /
+      ``{"data": [...]}``) — unwrap into ``{array_name: [...]}``.
+    * Items are not dicts — drop them.
+    * Items carry extra keys the strict schema forbids (e.g.
+      ``pattern`` on a phrase item, ``literal_translation``) — drop
+      unknown keys, keeping only the schema-allowed set.
+    * ``explanation_primary`` / ``explanation_secondary`` come back as
+      empty strings or non-strings — coerce to null so the
+      string-or-null schema accepts them.
+
+    Must never raise: it runs before validation on every attempt.
+    """
+    allowed = (_SEED_STRUCTURE_KEYS if array_name == "structures"
+               else _SEED_PHRASE_KEYS)
+    items = None
+    if isinstance(data, list):
+        items = data
+    elif isinstance(data, dict):
+        # Prefer the canonical key; fall back to common wrapper names
+        # the model sometimes uses instead of the requested array_name.
+        for key in (array_name, "items", "data", "results"):
+            if key in data and isinstance(data[key], list):
+                items = data[key]
+                break
+    if items is None:
+        # Leave data untouched so the validator reports the real error.
+        return data if isinstance(data, dict) else {}
+    cleaned = []
+    for item in items:
+        if not isinstance(item, dict):
             continue
-        pos = sense.pop("part_of_speech", None)
-        if pos is None:
-            pos = sense.pop("pos", None)
-        if pos is not None:
-            sense["pos"] = pos
-        defs = sense.pop("definitions", None)
-        if defs is None:
-            defs = sense.pop("glosses", None)
-        if defs is None:
-            defs = sense.pop("meanings", None)
-        # Some models emit a flat sense like
-        # {"pos": "...", "definition": "...", "example": "..."} instead
-        # of nesting the gloss into a `definitions` array. Promote that
-        # shape so it matches the strict schema. Any leftover `example`
-        # key with no gloss is dropped — the schema requires glossary
-        # to be a non-empty string.
-        if not defs:
-            flat_def = sense.pop("definition", None)
-            flat_ex = sense.pop("example", None)
-            if flat_def is not None:
-                defs = [{"glossary": flat_def}]
-                if flat_ex is not None:
-                    defs[0]["example"] = flat_ex
-            else:
-                sense.pop("example", None)
-        if defs is not None:
-            sense["definitions"] = defs
-        if isinstance(defs, list):
-            for d in defs:
-                if not isinstance(d, dict):
-                    continue
-                if "glossary" not in d:
-                    text = d.pop("text", None)
-                    if text is None:
-                        text = d.pop("translation", None)
-                    if text is not None:
-                        d["glossary"] = text
-                if "example" not in d:
-                    for alias in ("sentence", "usage_example", "usage"):
-                        if alias in d:
-                            d["example"] = d.pop(alias)
-                            break
-                for key in list(d):
-                    if key not in ("glossary", "example"):
-                        d.pop(key, None)
-        explanations = sense.get("explanations")
-        if isinstance(explanations, dict):
-            for key in list(explanations):
-                if key not in ("primary", "secondary"):
-                    explanations.pop(key, None)
-        sense.pop("glosses", None)
-        sense.pop("meanings", None)
-        for key in list(sense):
-            if key not in ("pos", "definitions", "explanations"):
-                sense.pop(key, None)
-    return data
+        kept = {}
+        for key in allowed:
+            if key not in item:
+                continue
+            value = item[key]
+            if key in ("explanation_primary", "explanation_secondary"):
+                if not isinstance(value, str) or not value:
+                    value = None
+            kept[key] = value
+        cleaned.append(kept)
+    return {array_name: cleaned}
 
 
 def lookup_word_via_llm(*, lang: str, word: str, explanation_primary: str | None,
@@ -554,12 +636,17 @@ def lookup_word_via_llm(*, lang: str, word: str, explanation_primary: str | None
         + script_note
     )
     user = (
-        f"Language: {lang}\n"
-        f"Word: {word}\n"
+        f"Target language (the dictionary's language): {_lang_name(lang)} ({lang})\n"
+        f"Word to look up: {word}\n"
         f"Primary explanation language: {primary}\n"
         f"Secondary explanation language (optional): {secondary or '(none)'}\n"
-        "Provide 1-3 senses. Each sense is an object with EXACTLY these "
-        "fields, using the EXACT names below:\n"
+        f"The word `{word}` is a word in {_lang_name(lang)}. Look it up as a "
+        f"{_lang_name(lang)} word: the `glossary` and `example` must be in "
+        f"{_lang_name(lang)}. Do NOT translate the word into another language "
+        f"or treat it as a foreign word — it belongs to {_lang_name(lang)}.\n"
+        "Return a JSON object with a single top-level key `senses` holding "
+        "an array of 1-3 sense objects. Each sense is an object with EXACTLY "
+        "these fields, using the EXACT names below:\n"
         "- `pos`: the part of speech (use this exact key, never "
         "`part_of_speech`)\n"
         "- `definitions`: a non-empty array of objects (never call this "
@@ -702,6 +789,7 @@ def _seed_one_batch(
         user=user,
         temperature=0.3,
         max_retries=1,
+        normalize=lambda d: _normalize_seed_batch(d, array_name=array_name),
     )
     return payload.get(array_name) or []
 

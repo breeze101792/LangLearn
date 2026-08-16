@@ -316,6 +316,38 @@ function renderEmptyState(host) {
   `;
 }
 
+// Show a loading indicator while a lookup is in flight. The source-switch
+// bar (the first line of the result card) is kept so the user can still
+// see and switch providers; only the dictionary content below it is
+// replaced with the spinner.
+function showLoading(host, word) {
+  const existing = host.querySelector(".word-card");
+  if (existing) {
+    const bar = existing.querySelector(".result-provider-switcher");
+    // Keep the source-switch bar; drop the rest of the card's content.
+    for (const child of Array.from(existing.children)) {
+      if (child !== bar) child.remove();
+    }
+    const loading = document.createElement("div");
+    loading.className = "row";
+    loading.style.cssText = "gap: var(--sp-3); align-items: center";
+    loading.innerHTML = `
+      <span class="spinner"></span>
+      <span>Looking up "${escapeHtml(word)}"…</span>
+    `;
+    existing.appendChild(loading);
+    return;
+  }
+  host.innerHTML = `
+    <div class="card">
+      <div class="row" style="gap: var(--sp-3); align-items: center">
+        <span class="spinner"></span>
+        <span>Looking up "${escapeHtml(word)}"…</span>
+      </div>
+    </div>
+  `;
+}
+
 async function pasteAndLookup(lang) {
   let text = "";
   try {
@@ -357,14 +389,7 @@ async function doLookup(word, lang, providerOverride) {
     resultHost.innerHTML = `<div class="empty-state"><div class="empty-state__msg">Type a word to look up.</div></div>`;
     return;
   }
-  resultHost.innerHTML = `
-    <div class="card">
-      <div class="row" style="gap: var(--sp-3); align-items: center">
-        <span class="spinner"></span>
-        <span>Looking up "${escapeHtml(word)}"…</span>
-      </div>
-    </div>
-  `;
+  showLoading(resultHost, word);
 
   // 1) local cache hit. A forced lookup asks for a specific source, so only
   // accept an entry produced by that provider; otherwise walk the chain in

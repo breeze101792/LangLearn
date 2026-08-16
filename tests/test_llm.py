@@ -125,6 +125,37 @@ def test_lookup_word_prompt_for_english_word(fresh, monkeypatch):
     assert "English" in user_msg["content"]
 
 
+def test_lookup_word_prompt_steers_word_to_target_language(fresh, monkeypatch):
+    """The prompt must tell the model the word belongs to the target
+    language, so an English dictionary doesn't translate a Spanish word
+    (or vice versa)."""
+    from backend.services import llm
+
+    captured = {}
+
+    def fake_post(url, json=None, headers=None, timeout=None):
+        captured["payload"] = json or {}
+        return _mock_openai_response(_json.dumps({
+            "senses": [{"pos": "noun", "definitions": [{"glossary": "ok"}]}],
+        }))
+
+    monkeypatch.setattr("backend.services.llm.requests.post", fake_post)
+    llm.lookup_word_via_llm(
+        lang="en", word="casa",
+        explanation_primary="zh", explanation_secondary=None,
+    )
+    user_msg = next(
+        (m for m in captured["payload"]["messages"] if m["role"] == "user"),
+        None,
+    )
+    assert user_msg is not None
+    text = user_msg["content"]
+    # The word is explicitly declared to be an English word.
+    assert "is a word in English" in text
+    # The model is told not to translate it into another language.
+    assert "Do NOT translate the word" in text
+
+
 def test_lookup_word_retries_on_invalid_json(fresh, monkeypatch):
     from backend.services import llm
 

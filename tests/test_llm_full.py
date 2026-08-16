@@ -258,17 +258,15 @@ def test_schema_error_includes_schema_name_and_last_response(fresh, monkeypatch)
 
     def fake_post(url, json=None, headers=None, timeout=None):
         # Return a response that is valid JSON but fails the strict
-        # schema: extras not allowed. This mimics a non-OpenAI proxy
-        # that ignores additionalProperties: False.
+        # schema: a structure item missing the required `explanation`
+        # field. (Extra keys are now repaired by the seed normalizer,
+        # so we use a missing-required-field failure to exercise the
+        # error-reporting path.)
         return _mock_openai_response(
             _json.dumps({"structures": [{"pattern": "S V O",
                                          "example_sentence": "She reads.",
-                                         "explanation": "Target-language note.",
-                                         "explanation_primary": "Basic",
-                                         # extras that violate additionalProperties: False
-                                         "familiar": 0,
-                                         "added_at": "2026-01-01"}],
-                          "phrases": []})
+                                         "explanation_primary": "Basic"}],
+                              "phrases": []})
         )
 
     monkeypatch.setattr("backend.services.llm.requests.post", fake_post)
@@ -279,9 +277,9 @@ def test_schema_error_includes_schema_name_and_last_response(fresh, monkeypatch)
     # Schema name is included.
     assert "seed_structures" in msg
     # Last validation error is included.
-    assert "Additional properties are not allowed" in msg or "familiar" in msg
+    assert "required" in msg or "explanation" in msg
     # A sample of the last response is included.
-    assert "familiar" in msg
+    assert "She reads." in msg or "Basic" in msg
 
 
 def test_schema_error_surfaces_json_parse_failure(fresh, monkeypatch):
@@ -438,18 +436,21 @@ def test_openai_url_strips_trailing_slash(monkeypatch, tmp_path):
 # --- schema validation specifics ----------------------------------------
 
 
-def test_lookup_word_rejects_empty_senses(fresh, monkeypatch):
+def test_lookup_word_accepts_empty_senses(fresh, monkeypatch):
+    """An empty `senses` array is a valid (empty) result, not a schema
+    failure. The chain executor treats the resulting empty WordEntry as
+    'no result' and falls through to the next provider."""
     from backend.services import llm
 
-    bad = {"senses": []}  # minItems: 1
+    bad = {"senses": []}
 
     def fake_post(url, json=None, headers=None, timeout=None):
         return _mock_openai_response(_json.dumps(bad))
 
     monkeypatch.setattr("backend.services.llm.requests.post", fake_post)
-    with pytest.raises(llm.LLMSchemaError):
-        llm.lookup_word_via_llm(lang="en", word="dog",
-                                  explanation_primary="en", explanation_secondary=None)
+    data = llm.lookup_word_via_llm(lang="en", word="dog",
+                                   explanation_primary="en", explanation_secondary=None)
+    assert data == {"senses": []}
 
 
 def test_lookup_word_rejects_extra_properties(fresh, monkeypatch):
@@ -568,7 +569,44 @@ def test_lookup_word_promotes_flat_sense_shape(fresh, monkeypatch):
     ]}
 
 
-def test_lookup_word_rejects_missing_glossary(fresh, monkeypatch):
+def test_lookup_word_promotes_flat_top_level_sense(fresh, monkeypatch):
+    """Some models return a single flat sense object at the top level
+    (``{"pos": ..., "definitions": [...], "explanations": {...}}``)
+    instead of wrapping it in ``{"senses": [...]}``. The normalizer
+    wraps it so strict validation passes."""
+    from backend.services import llm
+
+    flat = {"pos": "verb",
+            "definitions": [
+                {"glossary": "to throw something with force",
+                 "example": "He cast the net into the sea."},
+                {"glossary": "to choose an actor for a part",
+                 "example": "The director cast her as the lead."},
+            ],
+            "explanations": {"primary": "To throw or to select someone."}}
+
+    def fake_post(url, json=None, headers=None, timeout=None):
+        return _mock_openai_response(_json.dumps(flat))
+
+    monkeypatch.setattr("backend.services.llm.requests.post", fake_post)
+    data = llm.lookup_word_via_llm(lang="en", word="cast",
+                                   explanation_primary="en", explanation_secondary=None)
+    assert data == {"senses": [
+        {"pos": "verb",
+         "definitions": [
+             {"glossary": "to throw something with force",
+              "example": "He cast the net into the sea."},
+             {"glossary": "to choose an actor for a part",
+              "example": "The director cast her as the lead."},
+         ],
+         "explanations": {"primary": "To throw or to select someone."}},
+    ]}
+
+
+def test_lookup_word_accepts_missing_glossary(fresh, monkeypatch):
+    """A definition with no glossary is tolerated by the schema instead of
+    failing the lookup. The raw dict is returned; the provider's salvage
+    logic drops the empty definition downstream."""
     from backend.services import llm
 
     bad = {"senses": [{"pos": "noun", "definitions": [{}]}]}
@@ -577,9 +615,34 @@ def test_lookup_word_rejects_missing_glossary(fresh, monkeypatch):
         return _mock_openai_response(_json.dumps(bad))
 
     monkeypatch.setattr("backend.services.llm.requests.post", fake_post)
-    with pytest.raises(llm.LLMSchemaError):
-        llm.lookup_word_via_llm(lang="en", word="dog",
-                                  explanation_primary="en", explanation_secondary=None)
+    data = llm.lookup_word_via_llm(lang="en", word="dog",
+                                   explanation_primary="en", explanation_secondary=None)
+    assert data == {"senses": [
+        {"pos": "noun", "definitions": [{"glossary": None}]},
+    ]}
+
+
+def test_lookup_word_salvages_partial_senses(fresh, monkeypatch):
+    """A word where one sense is broken (missing pos, empty glossary) but
+    another is complete should pass schema validation; the provider's
+    salvage logic keeps the complete sense and drops the broken one."""
+    from backend.services import llm
+
+    partial = {"senses": [
+        {"pos": "noun", "definitions": [{"glossary": "good sense"}]},
+        {"pos": None, "definitions": [{"glossary": ""}]},
+    ]}
+
+    def fake_post(url, json=None, headers=None, timeout=None):
+        return _mock_openai_response(_json.dumps(partial))
+
+    monkeypatch.setattr("backend.services.llm.requests.post", fake_post)
+    data = llm.lookup_word_via_llm(lang="en", word="dog",
+                                   explanation_primary="en", explanation_secondary=None)
+    assert data == {"senses": [
+        {"pos": "noun", "definitions": [{"glossary": "good sense"}]},
+        {"pos": None, "definitions": [{"glossary": ""}]},
+    ]}
 
 
 def test_llm_error_is_exception_subclass():

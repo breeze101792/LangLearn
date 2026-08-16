@@ -169,6 +169,25 @@ def test_llm_provider_skips_sense_with_no_definitions(fresh, monkeypatch):
     assert entry.senses[0].pos == "verb"
 
 
+def test_llm_provider_defaults_null_pos(fresh, monkeypatch):
+    """A sense with a null pos (now allowed by the schema) is kept and
+    its pos defaults to the placeholder instead of failing the lookup."""
+    from backend.services.dictionaries import llm as llm_provider
+    from backend.services import llm as llm_svc
+
+    payload = {"senses": [
+        {"pos": None, "definitions": [{"glossary": "a gloss"}]},
+    ]}
+
+    def fake(*, lang, word, **kw):
+        return payload
+    monkeypatch.setattr(llm_svc, "lookup_word_via_llm", fake)
+
+    entry = llm_provider.lookup("x", "en")
+    assert len(entry.senses) == 1
+    assert entry.senses[0].pos == "—"
+
+
 def test_llm_provider_supports_all_languages():
     from backend.services.dictionaries import llm
     assert llm.supports("en") is True
