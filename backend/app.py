@@ -106,6 +106,7 @@ def _register_blueprints(app: Flask) -> None:
     from .blueprints.analyze import bp as analyze_bp
     from .blueprints.refine import bp as refine_bp
     from .blueprints.translate import bp as translate_bp
+    from .blueprints.describe import bp as describe_bp
 
     app.register_blueprint(auth_bp)
     app.register_blueprint(settings_bp)
@@ -119,6 +120,7 @@ def _register_blueprints(app: Flask) -> None:
     app.register_blueprint(analyze_bp)
     app.register_blueprint(refine_bp)
     app.register_blueprint(translate_bp)
+    app.register_blueprint(describe_bp)
 
 
 def _register_auth_gate(app: Flask) -> None:

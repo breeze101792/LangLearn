@@ -40,3 +40,36 @@ export const api = {
   patch: (path, body) => request("PATCH", path, body || {}),
   del: (path) => request("DELETE", path),
 };
+
+// Submit a multipart/form-data body (file uploads). The caller passes a
+// FormData object and optional extra string fields. We do not set
+// Content-Type — the browser sets it with the correct boundary when the
+// body is a FormData instance.
+export async function uploadForm(path, formData) {
+  let r;
+  try {
+    r = await fetch(path, {
+      method: "POST",
+      credentials: "same-origin",
+      body: formData,
+    });
+  } catch (e) {
+    return { ok: false, error: "network_error", data: null };
+  }
+  let data;
+  try {
+    data = await r.json();
+  } catch (e) {
+    return { ok: false, error: "invalid_json", data: null, status: r.status };
+  }
+  if (r.status === 401) {
+    if (onUnauthorized) {
+      try { onUnauthorized(); } catch (e) { console.error("unauthorized handler failed", e); }
+    }
+    return { ok: false, error: data?.error || "unauthorized", data: null, status: 401 };
+  }
+  if (!r.ok) {
+    return { ok: false, error: data?.error || "http_error", data: data?.data ?? null, status: r.status };
+  }
+  return data;
+}

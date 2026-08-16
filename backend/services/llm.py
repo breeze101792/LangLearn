@@ -379,10 +379,25 @@ class _BaseClient:
              timeout: int | None = None) -> str:
         raise NotImplementedError
 
+    def chat_messages(self, *, messages, schema, schema_name, temperature,
+                      timeout: int | None = None) -> str:
+        raise NotImplementedError
+
 
 class OpenAICompatClient(_BaseClient):
     def chat(self, *, system, user, schema, schema_name, temperature,
              timeout: int | None = None) -> str:
+        return self.chat_messages(
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            schema=schema, schema_name=schema_name,
+            temperature=temperature, timeout=timeout,
+        )
+
+    def chat_messages(self, *, messages, schema, schema_name, temperature,
+                      timeout: int | None = None) -> str:
         import os
         api_key = os.environ.get("OPENAI_API_KEY", "") or config.OPENAI_API_KEY
         url = (os.environ.get("OPENAI_BASE_URL") or config.OPENAI_BASE_URL).rstrip("/") + "/chat/completions"
@@ -394,10 +409,7 @@ class OpenAICompatClient(_BaseClient):
             raise LLMError("OPENAI_API_KEY is not set")
         payload = {
             "model": model,
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
+            "messages": messages,
             "temperature": temperature,
             "response_format": {
                 "type": "json_schema",
@@ -2200,3 +2212,364 @@ def apply_explanations_via_llm(*, lang: str,
             )
         )
     return {"structures": out_structures, "phrases": out_phrases}
+
+
+# ---- describe_image_via_llm -------------------------------------------
+#
+# "Describe" takes an uploaded image and the user's target language and
+# produces:
+#
+#   * `description` — a short paragraph in the target language describing
+#     what's in the picture. This is the headline output and the main
+#     teaching payload: a learner reads it to learn how to describe a
+#     scene in the language they're studying.
+#   * `description_primary` / `description_secondary` — translations of
+#     `description` into the user's native languages, following the same
+#     explanation-language rules as the rest of the app (primary is
+#     skipped when the target language equals it).
+#   * `words` — a list of concrete vocabulary items visible in the image
+#     (objects, animals, people, actions, settings). Each item is shaped
+#     to fit the existing "Add to Vocab" one-click save flow:
+#     `word`, `pos`, `glossary` (in the target language), `example` (a
+#     short phrase using the word in the target language), plus
+#     `explanation_primary` / `explanation_secondary` for non-target
+#     readers.
+#
+# The image is sent to the model as a base64 data URL inside a
+# multimodal Chat Completions message. Schema-strict JSON is still
+# requested; the same `complete_json` retry/validate path is used, but
+# the user message carries an `image_url` content part alongside the
+# text instructions.
+
+DESCRIBE_SCHEMA: dict = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["description", "words"],
+    "properties": {
+        "description": {"type": "string", "minLength": 1, "maxLength": 2000},
+        "description_primary": {"type": ["string", "null"], "maxLength": 2000},
+        "description_secondary": {"type": ["string", "null"], "maxLength": 2000},
+        "words": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["word", "pos", "glossary"],
+                "properties": {
+                    "word": {"type": "string", "minLength": 1, "maxLength": 200},
+                    "pos": {"type": "string", "maxLength": 32},
+                    "glossary": {"type": "string", "minLength": 1, "maxLength": 1000},
+                    "example": {"type": ["string", "null"], "maxLength": 1000},
+                    "explanation_primary": {"type": ["string", "null"], "maxLength": 1000},
+                    "explanation_secondary": {"type": ["string", "null"], "maxLength": 1000},
+                },
+            },
+        },
+    },
+}
+
+
+DESCRIBE_TIMEOUT_SECONDS: int = int(
+    os.environ.get("LLM_DESCRIBE_TIMEOUT_SECONDS", "600")
+)
+
+
+def _build_describe_user_prompt(
+    *, target_name: str, primary_name: str, secondary_name: str,
+    keep_primary: bool, keep_secondary: bool,
+) -> str:
+    parts: list[str] = [
+        f"Target language (the one being learned): {target_name}.",
+        "Describe the image in the target language and extract concrete",
+        "vocabulary items visible in it. Return ONLY a JSON object matching",
+        "the schema. No prose, no code fences.",
+        "",
+        "Fields:",
+        f"- `description`: a short paragraph (3-6 sentences) in {target_name}",
+        f"  describing what's in the picture. Use natural, everyday",
+        f"  phrasing a learner can imitate. Mention the main subjects, the",
+        f"  setting, and any notable action.",
+        f"- `words`: up to 12 concrete vocabulary items visible in the image.",
+        f"  Each item is an object with:",
+        f"    * `word`: the lemma form, written in {target_name}.",
+        f"    * `pos`: the part of speech (use this exact key).",
+        f"    * `glossary`: a short definition OF THE WORD, written in",
+        f"      {target_name} (not a translation).",
+        f"    * `example`: an optional short phrase showing the word used in",
+        f"      the context of the picture, written in {target_name}. May be",
+        f"      null.",
+        "",
+        f"All `word`, `glossary`, and `example` values must be in {target_name}.",
+    ]
+    if keep_primary:
+        parts.append(
+            f"Also include `description_primary`: a translation of "
+            f"`description` for a reader who doesn't speak {target_name}, "
+            f"written in {primary_name}."
+        )
+    else:
+        parts.append(
+            f"Do NOT include `description_primary`: {target_name} already "
+            f"shows the description."
+        )
+    if keep_secondary:
+        parts.append(
+            f"Also include `description_secondary` in {secondary_name}."
+        )
+    else:
+        parts.append("Do NOT include `description_secondary`.")
+    parts.append(
+        "If the image has no clear subject or is too abstract to describe, "
+        "return a single-sentence `description` and an empty `words` array."
+    )
+    return "\n".join(parts)
+
+
+def _normalize_describe(data: dict) -> dict:
+    """Repair common field-name variants non-OpenAI models produce for the
+    describe schema. Must never raise: runs before strict validation on
+    every attempt.
+
+    - `caption` / `summary` / `text` -> `description`.
+    - `description_native` / `description_translation` -> `description_primary`.
+    - `vocabulary` / `items` / `vocab` -> `words`.
+    - per-word: `lemma` / `term` / `name` -> `word`; `definition` / `meaning`
+      -> `glossary`; `sentence` / `usage` -> `example`.
+    - unknown keys dropped from both the top level and word items.
+    """
+    if not isinstance(data, dict):
+        return data
+    if "description" not in data:
+        for alias in ("caption", "summary", "text", "scene"):
+            if alias in data and isinstance(data[alias], str):
+                data["description"] = data.pop(alias)
+                break
+    if "description_primary" not in data:
+        for alias in ("description_native", "description_translation", "primary"):
+            if alias in data:
+                data["description_primary"] = data.pop(alias)
+                break
+    if "words" not in data:
+        for alias in ("vocabulary", "items", "vocab", "terms"):
+            if alias in data and isinstance(data[alias], list):
+                data["words"] = data.pop(alias)
+                break
+    for key in list(data):
+        if key not in ("description", "description_primary", "description_secondary", "words"):
+            data.pop(key, None)
+    words = data.get("words")
+    if isinstance(words, list):
+        cleaned = []
+        for w in words:
+            if not isinstance(w, dict):
+                continue
+            if "word" not in w:
+                for alias in ("lemma", "term", "name", "label"):
+                    if alias in w:
+                        w["word"] = w.pop(alias)
+                        break
+            if "pos" not in w:
+                for alias in ("part_of_speech", "part"):
+                    if alias in w:
+                        w["pos"] = w.pop(alias)
+                        break
+            if not w.get("glossary"):
+                for alias in ("definition", "meaning", "gloss", "glossary_text"):
+                    if alias in w:
+                        w["glossary"] = w.pop(alias)
+                        break
+            if not w.get("example"):
+                for alias in ("sentence", "usage", "usage_example"):
+                    if alias in w:
+                        w["example"] = w.pop(alias)
+                        break
+            for key in list(w):
+                if key not in ("word", "pos", "glossary", "example",
+                               "explanation_primary", "explanation_secondary"):
+                    w.pop(key, None)
+            if not isinstance(w.get("word"), str) or not w["word"].strip():
+                continue
+            if not isinstance(w.get("glossary"), str) or not w["glossary"].strip():
+                continue
+            if not isinstance(w.get("pos"), str):
+                w["pos"] = ""
+            w["word"] = w["word"].strip()[:200]
+            w["glossary"] = w["glossary"].strip()[:1000]
+            w["pos"] = w["pos"][:32]
+            cleaned.append(w)
+        data["words"] = cleaned
+    return data
+
+
+def _build_describe_messages(
+    *, system: str, user_text: str, image_data_url: str,
+) -> list[dict]:
+    """Build the Chat Completions message array with a multimodal user
+    turn. The image is attached as an `image_url` content part pointing at
+    a base64 data URL. Text instructions live alongside it as a `text`
+    part so the model knows the schema and language rules."""
+    return [
+        {"role": "system", "content": system},
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": user_text},
+                {"type": "image_url", "image_url": {"url": image_data_url}},
+            ],
+        },
+    ]
+
+
+def describe_image_via_llm(
+    *, target_lang: str, image_bytes: bytes, mime_type: str = "image/jpeg",
+    primary: str | None = None,
+    secondary: str | None = None,
+) -> dict:
+    """Ask a vision-capable LLM to describe ``image_bytes`` in ``target_lang``
+    and extract concrete vocabulary items visible in it. Returns the
+    parsed dict matching :data:`DESCRIBE_SCHEMA`: ``{description,
+    description_primary?, description_secondary?, words}``.
+
+    The image is sent as a base64 data URL inside a multimodal Chat
+    Completions message. The explanation-language rules apply to
+    ``description_primary`` / ``description_secondary`` (primary is
+    skipped when the target language equals it, secondary is skipped
+    when it would be redundant with primary or unset).
+
+    Raises :class:`LLMError` on network or schema failures, and
+    :class:`ValueError` if ``image_bytes`` is empty or ``mime_type`` is
+    not a recognized image type.
+    """
+    if not isinstance(image_bytes, (bytes, bytearray)) or not image_bytes:
+        raise ValueError("image_bytes required")
+    if mime_type not in ("image/jpeg", "image/png", "image/webp", "image/gif"):
+        raise ValueError(f"unsupported image mime type: {mime_type}")
+
+    import base64
+    encoded = base64.b64encode(bytes(image_bytes)).decode("ascii")
+    data_url = f"data:{mime_type};base64,{encoded}"
+
+    keep_primary = _should_generate_primary(target_lang, primary)
+    keep_secondary = _should_generate_secondary(primary, secondary)
+    target_name = _lang_name(target_lang)
+    primary_name = _lang_name(primary) if primary else ""
+    secondary_name = _lang_name(secondary) if secondary else ""
+
+    script_note = ""
+    if "zh" in (target_lang, primary, secondary):
+        script_note = " For Chinese content, use Traditional Chinese characters."
+
+    system = (
+        "You are a language tutor. Describe pictures in the target language "
+        "and pull out concrete vocabulary items a learner would want to "
+        "study. Return ONLY a JSON object matching the schema. No prose, "
+        "no code fences."
+        + script_note
+    )
+    user_text = _build_describe_user_prompt(
+        target_name=target_name,
+        primary_name=primary_name, secondary_name=secondary_name,
+        keep_primary=keep_primary, keep_secondary=keep_secondary,
+    )
+    messages = _build_describe_messages(
+        system=system, user_text=user_text, image_data_url=data_url,
+    )
+    raw = _describe_complete_json(
+        schema=DESCRIBE_SCHEMA,
+        schema_name="describe_image",
+        messages=messages,
+        temperature=0.3,
+        max_retries=0,
+        normalize=_normalize_describe,
+        timeout=DESCRIBE_TIMEOUT_SECONDS,
+    )
+    # Reuse the shared explanation-rules engine for the words array by
+    # treating the top-level `description_primary` / `description_secondary`
+    # fields as if they were `explanation_primary` / `explanation_secondary`.
+    # The shared helper walks `structures` / `phrases` / `words` arrays and
+    # also handles a single fill-shaped object at the top level — but our
+    # payload has BOTH (words array AND description_* at the top), so we
+    # split: apply the array pass to a wrapper that only carries `words`,
+    # then apply the single-object pass to the top-level description_*.
+    data = json.loads(raw)
+    words_payload = {"words": data.get("words") or []}
+    apply_explanation_rules(
+        words_payload, lang=target_lang, primary=primary, secondary=secondary,
+    )
+    data["words"] = words_payload.get("words") or []
+
+    top_payload: dict = {}
+    if "description_primary" in data:
+        top_payload["explanation_primary"] = data.pop("description_primary")
+    if "description_secondary" in data:
+        top_payload["explanation_secondary"] = data.pop("description_secondary")
+    apply_explanation_rules(
+        top_payload, lang=target_lang, primary=primary, secondary=secondary,
+    )
+    if "explanation_primary" in top_payload:
+        data["description_primary"] = top_payload.pop("explanation_primary")
+    if "explanation_secondary" in top_payload:
+        data["description_secondary"] = top_payload.pop("explanation_secondary")
+    return data
+
+
+def _describe_complete_json(
+    *, schema: dict, schema_name: str, messages: list[dict],
+    temperature: float = 0.2, max_retries: int = 1,
+    normalize: Callable[[dict], dict] | None = None,
+    timeout: int | None = None,
+) -> str:
+    """Sibling of :func:`complete_json` that takes a pre-built ``messages``
+    array (so the describe path can attach an image content part) and
+    returns the raw JSON string the model produced. Validates against
+    ``schema`` with the same retry-on-schema-error policy as the text
+    path."""
+    validator = Draft202012Validator(schema)
+    client = _client()
+    last_error: str | None = None
+    last_raw: str | None = None
+
+    for attempt in range(max_retries + 1):
+        if not last_error:
+            attempt_messages = messages
+        else:
+            # Append a follow-up user text turn explaining the validation
+            # failure. The original image is still visible from the
+            # prior user turn.
+            attempt_messages = messages + [
+                {"role": "user", "content": (
+                    "Your previous response failed validation:\n"
+                    + last_error
+                    + "\n\nReturn valid JSON only. No prose."
+                )},
+            ]
+        raw = client.chat_messages(
+            messages=attempt_messages,
+            schema=schema, schema_name=schema_name,
+            temperature=temperature, timeout=timeout,
+        )
+        last_raw = raw
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError as e:
+            last_error = f"not valid JSON: {e}"
+            log.warning("LLM JSON parse error (attempt %d): %s", attempt + 1, e)
+            continue
+        if normalize is not None:
+            try:
+                data = normalize(data)
+            except Exception as e:
+                log.warning("LLM normalize error (attempt %d): %s", attempt + 1, e)
+        try:
+            validator.validate(data)
+            return json.dumps(data)
+        except ValidationError as e:
+            last_error = e.message
+            log.warning("LLM schema validation error (attempt %d): %s",
+                        attempt + 1, e.message)
+    sample = (last_raw or "")[:400]
+    raise LLMSchemaError(
+        f"LLM did not produce valid JSON for schema '{schema_name}' "
+        f"after {max_retries + 1} attempts. Last error: {last_error}. "
+        f"Last response (truncated to 400 chars): {sample!r}"
+    )

@@ -1,16 +1,17 @@
-// Assist page: three text tools on one page — Analyze, Refine, Translate —
-// switched with a sub-nav tab bar exactly like the Learn page's Review /
-// New words / Reviewed words subpages.
+// Assist page: text + image tools on one page — Analyze, Refine, Translate,
+// Describe — switched with a sub-nav tab bar exactly like the Learn page's
+// Review / New words / Reviewed words subpages.
 //
 // Routes:
 //   #/assist             — Analyze (default)
 //   #/assist/refine      — Refine
 //   #/assist/translate   — Translate
+//   #/assist/describe    — Describe (image -> vocabulary)
 //
 // Each tool keeps its own textarea text and last result, persisted via
 // page-state.js so switching tabs and returning keeps everything.
 
-import { api } from "../api.js";
+import { api, uploadForm } from "../api.js";
 import { store } from "../state.js";
 import { toast } from "../components/toast.js";
 import { consumeRestoredState } from "../components/page-state.js";
@@ -20,6 +21,7 @@ const moduleState = {
   analyze: { lastResult: null },
   refine: { lastResult: null },
   translate: { lastResult: null },
+  describe: { lastResult: null },
 };
 
 export function renderAssist(host) {
@@ -32,6 +34,10 @@ export function renderAssist(host) {
     renderTranslatePage(host);
     return;
   }
+  if (hash === "#/assist/describe") {
+    renderDescribePage(host);
+    return;
+  }
   renderAnalyzePage(host);
 }
 
@@ -40,6 +46,7 @@ function renderAssistSubNav(host, active) {
     { key: "analyze", hash: "#/assist", label: "Analyze" },
     { key: "refine", hash: "#/assist/refine", label: "Refine" },
     { key: "translate", hash: "#/assist/translate", label: "Translate" },
+    { key: "describe", hash: "#/assist/describe", label: "Describe" },
   ];
   host.insertAdjacentHTML("afterbegin", `
     <nav class="transfer-tabs" aria-label="Text tools">
@@ -66,6 +73,85 @@ function escapeHtml(s) {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
+}
+
+// Resize an image File in the browser before upload so a 30 MiB phone
+// photo never crosses the wire. Loads the file into an <img>, draws it
+// onto a canvas capped at MAX_EDGE px on its long side (preserving
+// aspect ratio), and re-encodes as JPEG at quality 0.85. GIFs are
+// flattened to a single frame (the first). Falls back gracefully: if
+// the source is already small enough the original File is returned
+// unchanged; if the canvas path throws, the caller catches and
+// uploads the original.
+//
+// The MAX_EDGE of 1568 matches the long-side cap of OpenAI's "high
+// detail" vision tier — anything bigger is downscaled by the provider
+// anyway, so we save the upload bandwidth.
+const DESCRIBE_MAX_EDGE = 1568;
+const DESCRIBE_JPEG_QUALITY = 0.85;
+
+function resizeImageForUpload(file) {
+  return new Promise((resolve, reject) => {
+    if (typeof document === "undefined" || typeof document.createElement !== "function") {
+      resolve(file);
+      return;
+    }
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      try {
+        const srcW = img.naturalWidth || img.width || 0;
+        const srcH = img.naturalHeight || img.height || 0;
+        if (!srcW || !srcH) {
+          resolve(file);
+          return;
+        }
+        const longest = Math.max(srcW, srcH);
+        if (longest <= DESCRIBE_MAX_EDGE && file.size <= 1.5 * 1024 * 1024) {
+          // Already small enough — keep the original bytes (and the
+          // original format, which matters for PNGs with text).
+          resolve(file);
+          return;
+        }
+        const scale = DESCRIBE_MAX_EDGE / longest;
+        const dstW = Math.max(1, Math.round(srcW * scale));
+        const dstH = Math.max(1, Math.round(srcH * scale));
+        const canvas = document.createElement("canvas");
+        canvas.width = dstW;
+        canvas.height = dstH;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) {
+          resolve(file);
+          return;
+        }
+        // White background so transparent PNGs don't get black
+        // backgrounds when re-encoded as JPEG.
+        ctx.fillStyle = "#ffffff";
+        ctx.fillRect(0, 0, dstW, dstH);
+        ctx.drawImage(img, 0, 0, dstW, dstH);
+        canvas.toBlob(
+          (blob) => {
+            if (!blob) {
+              resolve(file);
+              return;
+            }
+            const name = (file.name || "image").replace(/\.[^.]+$/, "") + ".jpg";
+            resolve(new File([blob], name, { type: "image/jpeg" }));
+          },
+          "image/jpeg",
+          DESCRIBE_JPEG_QUALITY,
+        );
+      } catch (e) {
+        reject(e);
+      }
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error("could not decode image"));
+    };
+    img.src = url;
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -731,6 +817,268 @@ function renderTranslatePage(host) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Describe tool (image -> target-language description + vocab list)
+// ---------------------------------------------------------------------------
+
+function renderDescribePage(host) {
+  const state = store.get();
+  const lang = (state.settings && state.settings.active_language) || "en";
+  const primary = (state.settings && state.settings.explanation_primary) || null;
+  const secondary = (state.settings && state.settings.explanation_secondary) || null;
+  const languages = state.languages || [];
+  const restored = consumeRestoredState();
+
+  let lastResult = moduleState.describe.lastResult;
+
+  host.innerHTML = `
+    <header class="page-head">
+      <h1 class="page-head__title">Describe</h1>
+      <p class="page-head__subtitle">Upload a photo. The AI describes it in ${escapeHtml(langDisplayName(lang, languages))} and pulls out concrete vocabulary items you can add to your box with one click.</p>
+    </header>
+    <section class="card">
+      <div class="field">
+        <label class="field__label" for="describe-file">Photo (jpg / png / webp / gif)</label>
+        <input id="describe-file" type="file" accept="image/jpeg,image/png,image/webp,image/gif" class="input">
+        <p class="field__hint">Large photos are resized in your browser before upload. The image is sent to the LLM once and not stored on the server.</p>
+      </div>
+      <div id="describe-preview-wrap" class="describe-preview-wrap" hidden>
+        <img id="describe-preview" class="describe-preview" alt="Selected photo preview">
+        <button id="describe-clear" type="button" class="btn btn--ghost btn--sm">Remove</button>
+      </div>
+      <div class="row" style="margin-top: var(--sp-3); align-items: center">
+        <button id="describe-btn" class="btn btn--primary" type="button" disabled>✨ Describe</button>
+        <span class="spacer"></span>
+        <span class="badge badge--ai">In ${escapeHtml(langDisplayName(lang, languages))}</span>
+        ${primary ? `<span class="badge">${escapeHtml(langDisplayName(primary, languages))} notes</span>` : ""}
+        ${secondary ? `<span class="badge">${escapeHtml(langDisplayName(secondary, languages))} notes</span>` : ""}
+      </div>
+    </section>
+    <section id="describe-result" style="margin-top: var(--sp-4)"></section>
+  `;
+  renderAssistSubNav(host, "describe");
+
+  const btn = host.querySelector("#describe-btn");
+  const fileInput = host.querySelector("#describe-file");
+  const previewWrap = host.querySelector("#describe-preview-wrap");
+  const previewImg = host.querySelector("#describe-preview");
+  const clearBtn = host.querySelector("#describe-clear");
+  const result = host.querySelector("#describe-result");
+
+  let selectedFile = null;
+  let objectUrl = null;
+
+  function clearPreview() {
+    if (objectUrl) {
+      URL.revokeObjectURL(objectUrl);
+      objectUrl = null;
+    }
+    selectedFile = null;
+    previewWrap.hidden = true;
+    previewImg.removeAttribute("src");
+    btn.disabled = true;
+  }
+
+  fileInput.addEventListener("change", () => {
+    const file = fileInput.files && fileInput.files[0];
+    if (!file) {
+      clearPreview();
+      return;
+    }
+    // Allow large originals (the resize pass shrinks them before upload),
+    // but still cap the raw input so a 100 MiB phone photo doesn't hang
+    // the tab. 30 MiB matches the server-side cap.
+    if (file.size > 30 * 1024 * 1024) {
+      toast({ title: "Image too large", message: "Pick a file under 30 MiB.", variant: "error" });
+      fileInput.value = "";
+      clearPreview();
+      return;
+    }
+    if (!["image/jpeg", "image/png", "image/webp", "image/gif"].includes(file.type)) {
+      toast({ title: "Unsupported file type", message: "Use jpg, png, webp, or gif.", variant: "error" });
+      fileInput.value = "";
+      clearPreview();
+      return;
+    }
+    selectedFile = file;
+    if (objectUrl) URL.revokeObjectURL(objectUrl);
+    objectUrl = URL.createObjectURL(file);
+    previewImg.src = objectUrl;
+    previewWrap.hidden = false;
+    btn.disabled = false;
+  });
+
+  clearBtn.addEventListener("click", () => {
+    fileInput.value = "";
+    clearPreview();
+  });
+
+  btn.addEventListener("click", runDescribe);
+
+  if (restored && typeof restored === "object") {
+    if (restored.lastResult && typeof restored.lastResult === "object") {
+      lastResult = restored.lastResult;
+      moduleState.describe.lastResult = lastResult;
+      renderResult(result, lastResult);
+    }
+  }
+
+  async function runDescribe() {
+    if (!selectedFile) {
+      toast({ title: "Pick a photo first", variant: "error" });
+      fileInput.focus();
+      return;
+    }
+    btn.disabled = true;
+    const original = btn.textContent;
+    btn.textContent = "Describing…";
+    result.innerHTML = `
+      <div class="card">
+        <div class="row" style="gap: var(--sp-3); align-items: center">
+          <span class="spinner"></span>
+          <span>Looking at the picture…</span>
+        </div>
+      </div>
+    `;
+    try {
+      // Resize on the client so we never upload a 30 MiB phone photo.
+      // Falls back to the original file if the canvas path fails (e.g.
+      // the browser can't decode the format); the server still caps at
+      // 30 MiB as a safety net.
+      let uploadFile = selectedFile;
+      try {
+        uploadFile = await resizeImageForUpload(selectedFile);
+      } catch (e) {
+        console.warn("client-side image resize failed, uploading original", e);
+      }
+      const formData = new FormData();
+      formData.append("file", uploadFile, uploadFile.name || selectedFile.name);
+      formData.append("language", lang);
+      const res = await uploadForm("/api/describe", formData);
+      if (!res.ok) {
+        result.innerHTML = `
+          <div class="card" style="border-left: 4px solid var(--danger)">
+            <strong>Couldn't describe the photo</strong>
+            <p class="field__hint">${escapeHtml(res.error || "unknown error")}</p>
+          </div>`;
+        return;
+      }
+      lastResult = res.data || { description: "", words: [] };
+      moduleState.describe.lastResult = lastResult;
+      renderResult(result, lastResult);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = original;
+    }
+  }
+
+  function renderResult(host, data) {
+    const description = (data && data.description) || "";
+    const descPrimary = (data && data.description_primary) || null;
+    const descSecondary = (data && data.description_secondary) || null;
+    const words = (data && data.words) || [];
+
+    if (!description && !words.length) {
+      host.innerHTML = `
+        <div class="empty-state">
+          <div class="empty-state__icon">🪶</div>
+          <div class="empty-state__title">Nothing to describe</div>
+          <div class="empty-state__msg">The AI couldn't find anything concrete in the picture. Try a different photo.</div>
+        </div>
+      `;
+      return;
+    }
+
+    host.innerHTML = `
+      <div class="list">
+        ${description ? `
+          <section class="analyze-section">
+            <h2 class="analyze-section__title">Description</h2>
+            <div class="card refine-card">
+              <p class="refine-card__text">${escapeHtml(description)}</p>
+              ${descPrimary ? `<p class="refine-card__native"><span class="list-item__meta-label">${escapeHtml(langDisplayName(primary, languages))}:</span> ${escapeHtml(descPrimary)}</p>` : ""}
+              ${descSecondary ? `<p class="refine-card__native"><span class="list-item__meta-label">${escapeHtml(langDisplayName(secondary, languages))}:</span> ${escapeHtml(descSecondary)}</p>` : ""}
+            </div>
+          </section>
+        ` : ""}
+        ${words.length ? `
+          <section class="analyze-section">
+            <h2 class="analyze-section__title">Vocabulary (${words.length})</h2>
+            <div class="analyze-section__items">
+              ${words.map((w, i) => renderWord(w, i)).join("")}
+            </div>
+          </section>
+        ` : ""}
+      </div>
+    `;
+    host.querySelectorAll("button[data-save]").forEach((b) => {
+      b.addEventListener("click", () => onSave(b));
+    });
+  }
+
+  function renderWord(w, i) {
+    return `
+      <article class="list-item" data-kind="word" data-idx="${i}">
+        <div class="list-item__main"><strong>${escapeHtml(w.word || "")}</strong> <span class="word-card__pos">${escapeHtml(w.pos || "")}</span></div>
+        <div class="list-item__meta list-item__meta--target" title="In the target language">
+          <span class="list-item__meta-label">Meaning:</span>
+          ${escapeHtml(w.glossary || "")}
+        </div>
+        ${w.example ? `<div class="list-item__meta list-item__meta--target" title="In the target language">
+          <span class="list-item__meta-label">Example:</span>
+          <code>${escapeHtml(w.example)}</code>
+        </div>` : ""}
+        ${explainLines(w)}
+        <div class="list-item__actions">
+          <button type="button" class="btn btn--sm btn--primary" data-save="word" data-idx="${i}">+ Add to Vocab</button>
+        </div>
+      </article>
+    `;
+  }
+
+  function explainLines(item) {
+    const lines = [];
+    if (primary && item.explanation_primary) {
+      lines.push(`<div class="list-item__meta list-item__meta--native"><span class="list-item__meta-label">${escapeHtml(langDisplayName(primary, languages))}:</span> ${escapeHtml(item.explanation_primary)}</div>`);
+    }
+    if (secondary && item.explanation_secondary) {
+      lines.push(`<div class="list-item__meta list-item__meta--native"><span class="list-item__meta-label">${escapeHtml(langDisplayName(secondary, languages))}:</span> ${escapeHtml(item.explanation_secondary)}</div>`);
+    }
+    return lines.join("");
+  }
+
+  async function onSave(btn) {
+    if (!lastResult) return;
+    const idx = Number(btn.dataset.idx);
+    const list = lastResult.words || [];
+    const item = list[idx];
+    if (!item) return;
+    btn.disabled = true;
+    const original = btn.textContent;
+    btn.textContent = "Saving…";
+    const res = await api.post("/api/vocab/add-from-entry", {
+      lang,
+      word: item.word,
+      source: "llm",
+      pos: item.pos,
+      glossary: item.glossary,
+      example: item.example,
+      explanation_primary: item.explanation_primary,
+      explanation_secondary: item.explanation_secondary,
+    });
+    if (!res.ok) {
+      toast({ title: "Couldn't save", message: res.error || "unknown error", variant: "error" });
+      btn.disabled = false;
+      btn.textContent = original;
+      return;
+    }
+    btn.textContent = "✓ Saved";
+    btn.classList.remove("btn--primary");
+    btn.classList.add("btn--ghost");
+    toast({ title: "Saved", variant: "success", ttl: 1800 });
+  }
+}
+
 // Persist the active tool's textarea and last result so a quick detour to
 // another page doesn't lose work. The router calls this on every hash
 // change; without saving, navigating back would re-render a blank page.
@@ -738,9 +1086,15 @@ export function saveState() {
   const hash = window.location.hash || "#/assist";
   const tool = hash === "#/assist/refine" ? "refine"
     : hash === "#/assist/translate" ? "translate"
+    : hash === "#/assist/describe" ? "describe"
     : "analyze";
-  const id = { analyze: "analyze-text", refine: "refine-text", translate: "translate-text" }[tool];
-  const textarea = document.getElementById(id);
+  const id = {
+    analyze: "analyze-text",
+    refine: "refine-text",
+    translate: "translate-text",
+    describe: null,
+  }[tool];
+  const textarea = id ? document.getElementById(id) : null;
   const text = textarea ? textarea.value : "";
   const lastResult = moduleState[tool].lastResult;
   if (!text && !lastResult) return null;
