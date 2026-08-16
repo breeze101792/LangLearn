@@ -487,7 +487,7 @@ body.nav-drawer-open { overflow: hidden; }
 .list-item__meta--target { color: var(--text-primary); }
 .list-item__meta--native { color: var(--text-secondary); border-left: 2px solid var(--accent-soft); padding-left: 8px; }
 .list-item__meta--missing { color: var(--text-muted); font-style: italic; }
-.list-item__actions { display: flex; gap: var(--sp-2); }
+.list-item__actions { display: flex; gap: var(--sp-2); justify-content: flex-end; }
 .list-item__badges { display: flex; gap: var(--sp-1); flex-wrap: wrap; align-items: center; position: relative; }
 
 /* "I remember this" checkmark toggle on structures/phrases rows. Off by
