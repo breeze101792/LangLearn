@@ -108,6 +108,24 @@
 
       function go() { window.location.replace("/"); }
 
+      function clearUserData() {
+        var THEME = "langlearn:theme";
+        function clear(storage) {
+          try {
+            var keys = [];
+            for (var i = 0; i < storage.length; i++) {
+              var k = storage.key(i);
+              if (k && k.indexOf("langlearn:") === 0 && k !== THEME) keys.push(k);
+            }
+            keys.forEach(function (k) {
+              try { storage.removeItem(k); } catch (e) { /* */ }
+            });
+          } catch (e) { /* */ }
+        }
+        clear(localStorage);
+        clear(sessionStorage);
+      }
+
       form.addEventListener("submit", function (ev) {
         ev.preventDefault();
         clearError();
@@ -122,7 +140,7 @@
         })
         .then(function (r) { return r.json().then(function (b) { return { ok: r.ok, body: b }; }); })
         .then(function (res) {
-          if (res.ok && res.body && res.body.ok) { go(); return; }
+          if (res.ok && res.body && res.body.ok) { clearUserData(); go(); return; }
           var code = res.body && res.body.code;
           if (code === "rate_limited") {
             showError("Too many attempts. Please wait a minute and try again.");
