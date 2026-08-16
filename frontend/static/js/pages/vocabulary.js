@@ -10,6 +10,7 @@ import { api } from "../api.js";
 import { store } from "../state.js";
 import { toast } from "../components/toast.js";
 import { consumeRestoredState } from "../components/page-state.js";
+import { bindSpeakButtons } from "../components/speak.js";
 
 const BOX_LABELS = {
   1: "Box 1 (new)",
@@ -149,6 +150,7 @@ export function renderVocabulary(host) {
       return;
     }
     list.innerHTML = `<div class="list">${items.map(renderRow).join("")}</div>` + renderPager(items.length, total);
+    bindSpeakButtons(list);
   }
 
   function renderPager(itemCount, total) {
@@ -186,8 +188,10 @@ export function renderVocabulary(host) {
     return `
       <article class="list-item" data-id="${item.id}">
         <div class="list-item__badges">${sourceBadge}${pos}<span class="badge badge--muted">${escapeHtml(BOX_LABELS[box])}</span></div>
-        <div class="list-item__main"><strong>${escapeHtml(wordDisplay)}</strong></div>
-        ${item.glossary ? `<div class="list-item__meta">${escapeHtml(item.glossary)}</div>` : ""}
+      <div class="list-item__main"><strong>${escapeHtml(wordDisplay)}</strong>
+        <button type="button" class="word-card__speak" data-action="speak" data-word="${escapeHtml(wordDisplay)}" data-lang="${escapeHtml(item.language)}" aria-label="Pronounce ${escapeHtml(wordDisplay)}" title="Pronounce ${escapeHtml(wordDisplay)}">🔊</button>
+      </div>
+      ${item.glossary ? `<div class="list-item__meta">${escapeHtml(item.glossary)}</div>` : ""}
         ${item.example ? `<div class="list-item__meta" style="color: var(--text-muted)"><em>${escapeHtml(item.example)}</em></div>` : ""}
         <div class="list-item__actions">
           <div class="spacer"></div>
