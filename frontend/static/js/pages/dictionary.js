@@ -58,8 +58,26 @@ export function renderDictionary(host) {
             <button id="dict-clear" class="dict-search__clear" type="button"
                     aria-label="Clear search" hidden>&times;</button>
           </div>
-          <button id="dict-paste-btn" class="btn" type="button" title="Paste from clipboard and look up">Paste &amp; look up</button>
-          <button id="dict-search-btn" class="btn btn--primary">Look up</button>
+          <button id="dict-paste-btn" class="btn btn--icon" type="button"
+                  title="Paste from clipboard and look up"
+                  aria-label="Paste from clipboard and look up">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none"
+                 stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                 stroke-linejoin="round" aria-hidden="true">
+              <path d="M9 2h6a1 1 0 0 1 1 1v1H8V3a1 1 0 0 1 1-1z"/>
+              <rect x="6" y="4" width="12" height="18" rx="2"/>
+              <path d="M9 12l2 2 4-4"/>
+            </svg>
+          </button>
+          <button id="dict-search-btn" class="btn btn--primary btn--icon"
+                  title="Look up" aria-label="Look up">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none"
+                 stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                 stroke-linejoin="round" aria-hidden="true">
+              <circle cx="11" cy="11" r="7"/>
+              <path d="M21 21l-4.3-4.3"/>
+            </svg>
+          </button>
         </div>
         <ul id="dict-suggest" class="autocomplete__list" role="listbox"
             hidden aria-label="Word suggestions"></ul>

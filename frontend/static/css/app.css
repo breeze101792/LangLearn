@@ -192,6 +192,12 @@ body.nav-drawer-open { overflow: hidden; }
 .btn--lg { padding: var(--sp-3) var(--sp-5); font-size: 15px; }
 .btn:disabled, .btn[aria-disabled="true"] { opacity: 0.5; cursor: not-allowed; }
 .btn--block { width: 100%; }
+.btn--icon {
+  padding: var(--sp-2);
+  width: 38px;
+  aspect-ratio: 1;
+}
+.btn--icon svg { display: block; }
 
 /* Input */
 .input, .select {
