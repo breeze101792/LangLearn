@@ -56,7 +56,8 @@ def apply_grade(conn: sqlite3.Connection, vocab_id: int, grade_value: str,
         raise LookupError(f"vocab item not found: {vocab_id}")
     new_box, new_due = grade(row["leitner_box"], grade_value)
     conn.execute(
-        "UPDATE vocab_items SET leitner_box=?, next_due=? WHERE id=? AND user_id=?",
+        "UPDATE vocab_items SET leitner_box=?, next_due=?, reviewed_at=datetime('now') "
+        "WHERE id=? AND user_id=?",
         (new_box, new_due, vocab_id, user_id),
     )
     return new_box, new_due

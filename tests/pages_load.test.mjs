@@ -97,6 +97,8 @@ function assert(cond, msg) {
 // without clicking every link.
 const PAGES = [
   { hash: "#/review",      mod: "../frontend/static/js/pages/review.js",      render: "renderReview" },
+  { hash: "#/review/new",  mod: "../frontend/static/js/pages/review.js",      render: "renderReview" },
+  { hash: "#/review/reviewed", mod: "../frontend/static/js/pages/review.js",  render: "renderReview" },
   { hash: "#/vocabulary",  mod: "../frontend/static/js/pages/vocabulary.js",  render: "renderVocabulary" },
   { hash: "#/structures",  mod: "../frontend/static/js/pages/structures.js",  render: "renderStructures" },
   { hash: "#/phrases",     mod: "../frontend/static/js/pages/phrases.js",     render: "renderPhrases" },

@@ -202,6 +202,32 @@ def test_list_vocab_invalid_box_raises(fresh):
         v.list_vocab(user_id=1, language="es", box=6)
 
 
+def test_list_vocab_box_range(fresh):
+    """list_vocab(box_min, box_max) restricts to a range of boxes."""
+    from backend.services import vocab as v
+    a = _seed_vocab(fresh, word="a")
+    b = _seed_vocab(fresh, word="b")
+    c = _seed_vocab(fresh, word="c")
+    v.set_box(user_id=1, vocab_id=a["id"], box=1)
+    v.set_box(user_id=1, vocab_id=b["id"], box=3)
+    v.set_box(user_id=1, vocab_id=c["id"], box=5)
+    # Reviewed = boxes 2-5.
+    out = v.list_vocab(user_id=1, language="es", box_min=2, box_max=5)
+    assert {i["word"] for i in out} == {"b", "c"}
+    # New = box 1 only.
+    out_new = v.list_vocab(user_id=1, language="es", box_min=1, box_max=1)
+    assert {i["word"] for i in out_new} == {"a"}
+    assert v.count_vocab(user_id=1, language="es", box_min=2, box_max=5) == 2
+
+
+def test_list_vocab_box_range_invalid(fresh):
+    from backend.services import vocab as v
+    with pytest.raises(ValueError):
+        v.list_vocab(user_id=1, language="es", box_min=0)
+    with pytest.raises(ValueError):
+        v.list_vocab(user_id=1, language="es", box_max=6)
+
+
 # --- count_vocab -----------------------------------------------------------
 
 def test_count_vocab_total(fresh):
@@ -309,6 +335,23 @@ def test_list_vocab_endpoint_box_invalid(fresh):
     r = client.get("/api/vocab?lang=en&box=abc")
     assert r.status_code == 400
     assert r.get_json()["code"] == "invalid_box"
+
+
+def test_list_vocab_endpoint_box_range(fresh):
+    from backend.app import create_app
+    app = create_app()
+    client = app.test_client()
+    a = _seed_vocab(fresh, word="alpha", lang="en")
+    _seed_vocab(fresh, word="beta", lang="en")
+    from backend.services import vocab as v
+    v.set_box(user_id=1, vocab_id=a["id"], box=4)
+    r = client.get("/api/vocab?lang=en&box_min=2&box_max=5")
+    assert r.status_code == 200
+    body = r.get_json()["data"]
+    assert {i["word"] for i in body["items"]} == {"alpha"}
+    assert body["total"] == 1
+    assert body["box_min"] == 2
+    assert body["box_max"] == 5
 
 
 def test_patch_vocab_endpoint_sets_level(fresh):
@@ -750,6 +793,106 @@ def test_review_next_n_is_clamped_to_50(fresh):
     assert isinstance(items, list)
 
 
+def test_review_next_box_filters_single_box(fresh):
+    """review_next(box=N) must only return items at that Leitner box,
+    regardless of due date."""
+    from backend.services import vocab as v
+    a = v.add_vocab(user_id=1, language="es", word="a", source="user", glossary="g")
+    b = v.add_vocab(user_id=1, language="es", word="b", source="user", glossary="g")
+    v.set_box(user_id=1, vocab_id=a["id"], box=3)
+    # b is box 1 and due; a is box 3 and not due. box=3 must return only a.
+    items = v.review_next(user_id=1, language="es", n=10, box=3)
+    assert [i["word"] for i in items] == ["a"]
+    items1 = v.review_next(user_id=1, language="es", n=10, box=1)
+    assert [i["word"] for i in items1] == ["b"]
+
+
+def test_review_next_box_zero_returns_all_boxes(fresh):
+    """review_next(box=0) must pull from every box regardless of due date."""
+    from backend.services import vocab as v
+    a = v.add_vocab(user_id=1, language="es", word="a", source="user", glossary="g")
+    b = v.add_vocab(user_id=1, language="es", word="b", source="user", glossary="g")
+    v.set_box(user_id=1, vocab_id=a["id"], box=5)  # not due (30 days out)
+    items = v.review_next(user_id=1, language="es", n=10, box=0)
+    assert {i["word"] for i in items} == {"a", "b"}
+
+
+def test_review_next_box_invalid_raises(fresh):
+    from backend.services import vocab as v
+    with pytest.raises(ValueError):
+        v.review_next(user_id=1, language="es", n=10, box=6)
+    with pytest.raises(ValueError):
+        v.review_next(user_id=1, language="es", n=10, box=-1)
+
+
+def test_review_next_shuffle_respects_n_and_set(fresh):
+    """shuffle=True must return the same set of words but not exceed n."""
+    from backend.services import vocab as v
+    for w in ["a", "b", "c", "d", "e"]:
+        v.add_vocab(user_id=1, language="es", word=w, source="user", glossary="g")
+    got = v.review_next(user_id=1, language="es", n=3, shuffle=True)
+    assert len(got) == 3
+    # Every returned word is in the eligible pool.
+    pool = v.review_next(user_id=1, language="es", n=50, shuffle=False)
+    pool_words = {i["word"] for i in pool}
+    assert all(i["word"] in pool_words for i in got)
+
+
+def test_review_next_shuffle_changes_order(fresh):
+    """Two shuffled draws of the full pool should (almost always) differ."""
+    from backend.services import vocab as v
+    for w in ["a", "b", "c", "d", "e", "f", "g"]:
+        v.add_vocab(user_id=1, language="es", word=w, source="user", glossary="g")
+    first = [i["word"] for i in v.review_next(user_id=1, language="es", n=50, shuffle=True)]
+    second = [i["word"] for i in v.review_next(user_id=1, language="es", n=50, shuffle=True)]
+    # Extremely unlikely to collide for 7 distinct items (1 / 5040 chance).
+    assert first != second
+
+
+def test_apply_grade_records_reviewed_at(fresh):
+    """Grading must stamp reviewed_at so "reviewed today" is answerable."""
+    from backend.services import vocab as v
+    res = _seed_vocab(fresh)
+    v.apply_review_grade(user_id=1, vocab_id=res["id"], grade_value="easy")
+    items = v.list_vocab(user_id=1, language="es")
+    assert items[0]["reviewed_at"] is not None
+    # reviewed_at uses datetime('now') so it should be near today (UTC).
+    assert items[0]["reviewed_at"].startswith("20")
+
+
+def test_list_vocab_filters_reviewed_range(fresh):
+    """list_vocab(reviewed_after/reviewed_before) must bound by reviewed_at."""
+    from backend.services import vocab as v
+    a = _seed_vocab(fresh, word="a")
+    b = _seed_vocab(fresh, word="b")
+    # Grade a so it gets a reviewed_at stamp.
+    v.apply_review_grade(user_id=1, vocab_id=a["id"], grade_value="easy")
+    items = v.list_vocab(user_id=1, language="es")
+    ra = items[0]["reviewed_at"]
+    out = v.list_vocab(user_id=1, language="es",
+                       reviewed_after="2000-01-01 00:00:00",
+                       reviewed_before="2100-01-01 00:00:00")
+    assert {i["word"] for i in out} == {"a"}
+    out_far = v.list_vocab(user_id=1, language="es",
+                           reviewed_after="2100-01-01 00:00:00",
+                           reviewed_before="2200-01-01 00:00:00")
+    assert out_far == []
+
+
+def test_list_vocab_filters_added_range(fresh):
+    """list_vocab(added_after/added_before) must bound by added_at."""
+    from backend.services import vocab as v
+    _seed_vocab(fresh, word="a")
+    out = v.list_vocab(user_id=1, language="es",
+                       added_after="2000-01-01 00:00:00",
+                       added_before="2100-01-01 00:00:00")
+    assert {i["word"] for i in out} == {"a"}
+    out_far = v.list_vocab(user_id=1, language="es",
+                           added_after="2100-01-01 00:00:00",
+                           added_before="2200-01-01 00:00:00")
+    assert out_far == []
+
+
 # --- review_status edge cases ---------------------------------------------
 
 def test_review_status_empty_language(fresh):
@@ -1030,6 +1173,31 @@ def test_review_next_endpoint_invalid_lang(fresh):
     client = app.test_client()
     r = client.get("/api/vocab/review/next?lang=ENG")
     assert r.status_code == 400
+
+
+def test_review_next_endpoint_box_filter(fresh):
+    from backend.app import create_app
+    app = create_app()
+    client = app.test_client()
+    a = _seed_vocab(fresh, word="alpha", lang="en")
+    _seed_vocab(fresh, word="beta", lang="en")
+    from backend.services import vocab as v
+    v.set_box(user_id=1, vocab_id=a["id"], box=4)
+    r = client.get("/api/vocab/review/next?lang=en&n=10&box=4")
+    assert r.status_code == 200
+    body = r.get_json()["data"]
+    assert {i["word"] for i in body["items"]} == {"alpha"}
+    r_all = client.get("/api/vocab/review/next?lang=en&n=10&box=0")
+    assert {i["word"] for i in r_all.get_json()["data"]["items"]} == {"alpha", "beta"}
+
+
+def test_review_next_endpoint_box_invalid(fresh):
+    from backend.app import create_app
+    app = create_app()
+    client = app.test_client()
+    r = client.get("/api/vocab/review/next?lang=en&box=abc")
+    assert r.status_code == 400
+    assert r.get_json()["code"] == "invalid_box"
 
 
 def test_review_grade_endpoint_happy(fresh):

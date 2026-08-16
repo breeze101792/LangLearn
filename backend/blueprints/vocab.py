@@ -25,14 +25,41 @@ def list_vocab():
             box = int(raw_box)
         except (TypeError, ValueError):
             return jsonify(err("box must be an integer 1-5", code="invalid_box")), 400
+    box_min = None
+    raw_min = request.args.get("box_min")
+    if raw_min is not None and raw_min != "":
+        try:
+            box_min = int(raw_min)
+        except (TypeError, ValueError):
+            return jsonify(err("box_min must be an integer 1-5", code="invalid_box")), 400
+    box_max = None
+    raw_max = request.args.get("box_max")
+    if raw_max is not None and raw_max != "":
+        try:
+            box_max = int(raw_max)
+        except (TypeError, ValueError):
+            return jsonify(err("box_max must be an integer 1-5", code="invalid_box")), 400
+    added_after = request.args.get("added_after")
+    added_before = request.args.get("added_before")
+    reviewed_after = request.args.get("reviewed_after")
+    reviewed_before = request.args.get("reviewed_before")
     try:
         items = vocab_svc.list_vocab(user_id=config.DEFAULT_USER_ID, language=lang,
-                                     limit=limit, offset=offset, box=box)
-        total = vocab_svc.count_vocab(user_id=config.DEFAULT_USER_ID, language=lang, box=box)
+                                     limit=limit, offset=offset, box=box,
+                                     box_min=box_min, box_max=box_max,
+                                     added_after=added_after, added_before=added_before,
+                                     reviewed_after=reviewed_after, reviewed_before=reviewed_before)
+        total = vocab_svc.count_vocab(user_id=config.DEFAULT_USER_ID, language=lang,
+                                      box=box, box_min=box_min, box_max=box_max,
+                                      added_after=added_after, added_before=added_before,
+                                      reviewed_after=reviewed_after, reviewed_before=reviewed_before)
     except ValueError as e:
         return jsonify(err(str(e), code="invalid_input")), 400
     return ok({"items": items, "limit": limit, "offset": offset,
-               "box": box, "total": total,
+               "box": box, "box_min": box_min, "box_max": box_max,
+               "added_after": added_after, "added_before": added_before,
+               "reviewed_after": reviewed_after, "reviewed_before": reviewed_before,
+               "total": total,
                "by_box": vocab_svc.review_status(
                    user_id=config.DEFAULT_USER_ID, language=lang)["by_box"]})
 
@@ -176,7 +203,19 @@ def review_next():
     if not is_valid_lang(lang):
         return jsonify(err("invalid language", code="invalid_lang")), 400
     n = int(request.args.get("n", 20))
-    items = vocab_svc.review_next(user_id=config.DEFAULT_USER_ID, language=lang, n=n)
+    box = None
+    raw_box = request.args.get("box")
+    if raw_box is not None and raw_box != "":
+        try:
+            box = int(raw_box)
+        except (TypeError, ValueError):
+            return jsonify(err("box must be an integer 0-5", code="invalid_box")), 400
+    shuffle = request.args.get("shuffle", "0").lower() in ("1", "true", "yes", "on")
+    try:
+        items = vocab_svc.review_next(user_id=config.DEFAULT_USER_ID, language=lang,
+                                      n=n, box=box, shuffle=shuffle)
+    except ValueError as e:
+        return jsonify(err(str(e), code="invalid_input")), 400
     return ok({"items": items, "count": len(items)})
 
 

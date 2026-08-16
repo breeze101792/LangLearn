@@ -1,4 +1,10 @@
-// Review page: recall session with Leitner grading.
+// Review page: recall session with Leitner grading, plus two list subpages
+// ("New words" = box 1, "Reviewed words" = boxes 2-5).
+//
+// Routes:
+//   #/review            — the recall session (with a box scope selector)
+//   #/review/new        — list of box-1 (new) words
+//   #/review/reviewed   — list of boxes 2-5 (reviewed) words
 
 import { api } from "../api.js";
 import { cache } from "../cache.js";
@@ -13,14 +19,75 @@ import {
   switcherProvidersFor,
 } from "../components/dict-card.js";
 
-let session = null; // { items, idx, sessionSize }
+const BOX_LABELS = {
+  1: "Box 1 (new)",
+  2: "Box 2",
+  3: "Box 3",
+  4: "Box 4",
+  5: "Box 5 (mastered)",
+};
+
+// Review scope for the session. "due" = only items whose next_due passed
+// (the original behaviour). "all" = every box regardless of due date.
+// A number 1-5 = that single box.
+const SCOPE_LABELS = {
+  due: "Due",
+  all: "All boxes",
+  1: "Box 1",
+  2: "Box 2",
+  3: "Box 3",
+  4: "Box 4",
+  5: "Box 5",
+};
+
+let session = null; // { items, idx, lang, scope }
 // Provider metadata for the active language, loaded once per session so the
 // review reveal can offer the same provider switcher as the dictionary page.
 let providerMeta = {};
 let providerMetaLoaded = false;
 let providerMetaLang = null;
 
+// Live state for the list subpages, read by saveState() on navigation away.
+const moduleState = { activeBox: null, offset: null };
+
 export function renderReview(host) {
+  const hash = window.location.hash || "#/review";
+  if (hash === "#/review/new") {
+    renderListPage(host, "new");
+    return;
+  }
+  if (hash === "#/review/reviewed") {
+    renderListPage(host, "reviewed");
+    return;
+  }
+  renderSessionPage(host);
+}
+
+// ---------------------------------------------------------------------------
+// Sub-nav shared by all three review subpages.
+// ---------------------------------------------------------------------------
+
+function renderSubNav(host, active) {
+  const items = [
+    { key: "review", hash: "#/review", label: "Review" },
+    { key: "new", hash: "#/review/new", label: "New words" },
+    { key: "reviewed", hash: "#/review/reviewed", label: "Reviewed words" },
+  ];
+  host.insertAdjacentHTML("afterbegin", `
+    <nav class="transfer-tabs" aria-label="Review subpages">
+      ${items.map((i) => `
+        <a class="transfer-tabs__item ${i.key === active ? "is-active" : ""}"
+           href="${i.hash}" aria-current="${i.key === active ? "page" : "false"}">${escapeHtml(i.label)}</a>
+      `).join("")}
+    </nav>
+  `);
+}
+
+// ---------------------------------------------------------------------------
+// Main review session page (#/review)
+// ---------------------------------------------------------------------------
+
+function renderSessionPage(host) {
   const state = store.get();
   const lang = (state.settings && state.settings.active_language) || "en";
   const restored = consumeRestoredState();
@@ -31,6 +98,7 @@ export function renderReview(host) {
     </header>
     <section id="review-body"></section>
   `;
+  renderSubNav(host, "review");
   const body = host.querySelector("#review-body");
   // If we navigated away mid-session, restore it directly. The items
   // list and current index are persisted; we replay the session at the
@@ -42,6 +110,9 @@ export function renderReview(host) {
       items: restored.items,
       idx: Math.max(0, Math.min(restored.idx, restored.items.length - 1)),
       lang,
+      scope: restored.scope || "due",
+      revealed: restored.revealed || {},
+      graded: restored.graded || {},
     };
     renderSession(body);
     return;
@@ -65,17 +136,43 @@ async function renderPreSession(host, lang) {
       <h2 class="card__title">Ready to review</h2>
       <p style="margin: var(--sp-2) 0"><strong>${due}</strong> word${due === 1 ? "" : "s"} due · session size: ${sessionSize}</p>
       <p class="field__hint">Box 1 (new): ${counts[1] || 0} · Box 2: ${counts[2] || 0} · Box 3: ${counts[3] || 0} · Box 4: ${counts[4] || 0} · Box 5: ${counts[5] || 0}</p>
+      <div class="field" style="margin-top: var(--sp-3)">
+        <label class="field__label" for="review-scope">Review scope</label>
+        <div class="segmented" id="review-scope" role="tablist" aria-label="Review scope">
+          ${Object.entries(SCOPE_LABELS).map(([key, label]) => `
+            <button class="segmented__item ${key === "due" ? "segmented__item--active" : ""}"
+                    data-scope="${key}" role="tab" aria-selected="${key === "due" ? "true" : "false"}">${escapeHtml(label)}</button>
+          `).join("")}
+        </div>
+        <p class="field__hint">"Due" reviews only words whose review date has passed. "All boxes" reviews every word regardless of date.</p>
+      </div>
       <div class="row" style="margin-top: var(--sp-4)">
         <button id="start-review" class="btn btn--primary" ${due === 0 ? "disabled" : ""}>Start review</button>
-        ${due === 0 ? `<span class="field__hint">Nothing to review right now. Look up some words in the dictionary to add them to your queue.</span>` : ""}
+        ${due === 0 ? `<span class="field__hint">Nothing due right now. Pick "All boxes" to review everything, or look up words in the dictionary to add them to your queue.</span>` : ""}
       </div>
     </div>
   `;
-  host.querySelector("#start-review")?.addEventListener("click", () => startSession(host, lang, sessionSize));
+  let scope = "due";
+  const scopeHost = host.querySelector("#review-scope");
+  scopeHost?.addEventListener("click", (e) => {
+    const btn = e.target.closest("button.segmented__item");
+    if (!btn) return;
+    scope = btn.dataset.scope;
+    scopeHost.querySelectorAll("button.segmented__item").forEach((b) => {
+      const on = (b === btn);
+      b.classList.toggle("segmented__item--active", on);
+      b.setAttribute("aria-selected", on ? "true" : "false");
+    });
+  });
+  host.querySelector("#start-review")?.addEventListener("click", () => startSession(host, lang, sessionSize, scope));
 }
 
-async function startSession(host, lang, n) {
-  const res = await api.get(`/api/vocab/review/next?lang=${encodeURIComponent(lang)}&n=${n}`);
+async function startSession(host, lang, n, scope) {
+  const box = scope === "all" ? 0 : (scope === "due" ? null : Number(scope));
+  // Shuffle the pool so a "due" session isn't the same every time.
+  const qs = `lang=${encodeURIComponent(lang)}&n=${n}&shuffle=1`
+    + (box !== null ? `&box=${box}` : "");
+  const res = await api.get(`/api/vocab/review/next?${qs}`);
   if (!res.ok) {
     toast({ title: "Could not start review", message: res.error, variant: "error" });
     return;
@@ -85,7 +182,7 @@ async function startSession(host, lang, n) {
     toast({ title: "Nothing to review", message: "Add words via the dictionary first.", variant: "info" });
     return;
   }
-  session = { items, idx: 0, lang };
+  session = { items, idx: 0, lang, scope };
   renderSession(host);
 }
 
@@ -97,10 +194,14 @@ function renderSession(host) {
   const item = session.items[session.idx];
   const total = session.items.length;
   const pct = ((session.idx) / total) * 100;
+  const atStart = session.idx === 0;
+  const atEnd = session.idx >= total - 1;
   host.innerHTML = `
     <div class="row" style="margin-bottom: var(--sp-3)">
-      <span>${session.idx + 1} / ${total}</span>
+      <button id="nav-prev" class="btn btn--ghost btn--sm" ${atStart ? "disabled" : ""} aria-label="Previous word">← Prev</button>
+      <span style="min-width: 3em; text-align: center">${session.idx + 1} / ${total}</span>
       <div class="progress" aria-label="Progress" style="flex: 1"><div class="progress__bar" style="width: ${pct.toFixed(1)}%"></div></div>
+      <button id="nav-next" class="btn btn--ghost btn--sm" ${atEnd ? "disabled" : ""} aria-label="Next word">Next →</button>
       <button id="end-session" class="btn btn--ghost btn--sm">End session</button>
     </div>
     <div class="card review-card" id="review-card">
@@ -118,7 +219,7 @@ function renderSession(host) {
         <button id="know-it" class="btn btn--ghost btn--lg" title="Grade as easy and move on">I know this (3)</button>
       </div>
     </div>
-    <div class="review-result" id="review-result" hidden>
+    <div class="review-result" id="review-result" ${revealedFor(session.idx) ? "" : "hidden"}>
       <div id="review-answer"></div>
     </div>
   `;
@@ -126,14 +227,62 @@ function renderSession(host) {
     session = null;
     renderReview(document.getElementById("app-main"));
   });
+  host.querySelector("#nav-prev").addEventListener("click", () => go(host, -1));
+  host.querySelector("#nav-next").addEventListener("click", () => go(host, +1));
   host.querySelector("#reveal").addEventListener("click", () => reveal(host, item));
   host.querySelector("#know-it").addEventListener("click", () => grade(item, "easy", host));
   bindSpeakButtons(host.querySelector("#review-card"));
+  // Re-paint a previously-revealed or graded answer when walking back.
+  if (isGraded(session.idx)) {
+    renderGradedCard(host, item);
+  } else if (revealedFor(session.idx)) {
+    reveal(host, item, true);
+  }
   document.removeEventListener("keydown", sessionKeyHandler);
   document.addEventListener("keydown", sessionKeyHandler);
 }
 
-async function reveal(host, item) {
+// Repaint a card that was already graded: show the answer and a "graded"
+// note, but no re-grade buttons (it's already counted this session).
+function renderGradedCard(host, item) {
+  const actions = host.querySelector("#review-actions");
+  const resultHost = host.querySelector("#review-result");
+  const answerHost = host.querySelector("#review-answer");
+
+  const cached = findCachedRecord(item.language, item.word);
+  const entry = (cached && cached.entry) || entryFromVocabRow(item);
+  const initialSource = (cached && cached.source) || item.source || "";
+
+  ensureProviderMeta(item.language).then(() => {
+    const providers = switcherListFor(item.language);
+    renderDictCard(answerHost, entry, initialSource, item.word, item.language,
+      { inVocab: true, leitnerBox: item.leitner_box ?? null },
+      providers,
+      (w, name) => switchAnswerProvider(item, answerHost, name),
+      null);
+  });
+
+  resultHost.hidden = false;
+  actions.innerHTML = `<span class="badge badge--ok">Graded this session</span>`;
+}
+
+function go(host, delta) {
+  const nextIdx = session.idx + delta;
+  if (nextIdx < 0 || nextIdx >= session.items.length) return;
+  session.idx = nextIdx;
+  renderSession(host);
+}
+
+function revealedFor(idx) {
+  return !!(session.revealed && session.revealed[idx]);
+}
+
+function markRevealed(idx) {
+  session.revealed = session.revealed || {};
+  session.revealed[idx] = true;
+}
+
+async function reveal(host, item, replay = false) {
   const actions = host.querySelector("#review-actions");
   const resultHost = host.querySelector("#review-result");
   const answerHost = host.querySelector("#review-answer");
@@ -158,6 +307,7 @@ async function reveal(host, item) {
     null);
 
   resultHost.hidden = false;
+  markRevealed(session.idx);
 
   // Swap the action row contents: remove "I know this" and surface Hard/Easy
   // up here, where the user is already focused, instead of after the answer.
@@ -167,7 +317,9 @@ async function reveal(host, item) {
   `;
   host.querySelector("#grade-hard").addEventListener("click", () => grade(item, "hard", host));
   host.querySelector("#grade-easy").addEventListener("click", () => grade(item, "easy", host));
-  host.querySelector("#grade-easy").focus();
+  // Only steal focus when the user actually clicked Reveal, not when we are
+  // replaying an already-revealed card on back-navigation.
+  if (!replay) host.querySelector("#grade-easy").focus();
 }
 
 async function ensureProviderMeta(lang) {
@@ -232,8 +384,19 @@ async function grade(item, value, host) {
     toast({ title: "Couldn't save grade", message: res.error, variant: "error" });
     return;
   }
+  // Mark this card as graded so navigating back doesn't offer to re-grade it.
+  markGraded(session.idx);
   session.idx++;
   renderSession(host);
+}
+
+function markGraded(idx) {
+  session.graded = session.graded || {};
+  session.graded[idx] = true;
+}
+
+function isGraded(idx) {
+  return !!(session.graded && session.graded[idx]);
 }
 
 function renderFinished(host, items) {
@@ -261,6 +424,12 @@ function sessionKeyHandler(e) {
     e.preventDefault();
     const reveal = document.getElementById("reveal");
     if (reveal) reveal.click();
+  } else if (e.key === "ArrowLeft") {
+    const b = document.getElementById("nav-prev");
+    if (b && !b.disabled) b.click();
+  } else if (e.key === "ArrowRight") {
+    const b = document.getElementById("nav-next");
+    if (b && !b.disabled) b.click();
   } else if (e.key === "1") {
     const b = document.getElementById("grade-hard");
     if (b) b.click();
@@ -273,22 +442,172 @@ function sessionKeyHandler(e) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// List subpages (#/review/new and #/review/reviewed)
+// ---------------------------------------------------------------------------
+
+function renderListPage(host, kind) {
+  const state = store.get();
+  const lang = (state.settings && state.settings.active_language) || "en";
+  const pageSize = (state.settings && state.settings.page_size) || 20;
+  const restored = consumeRestoredState();
+
+  const isNew = kind === "new";
+  const title = isNew ? "New words" : "Reviewed words";
+  const subtitle = isNew
+    ? "Words added today (Box 1) that you haven't reviewed yet."
+    : "Words you reviewed today, from any box (1-5).";
+
+  host.innerHTML = `
+    <header class="page-head">
+      <h1 class="page-head__title">${title}</h1>
+      <p class="page-head__subtitle">${subtitle}</p>
+    </header>
+    <section id="review-list"></section>
+  `;
+  renderSubNav(host, kind);
+  const list = host.querySelector("#review-list");
+
+  let offset = 0;
+  if (restored && typeof restored === "object") {
+    if (Number.isFinite(restored.offset) && restored.offset >= 0) {
+      offset = restored.offset;
+    }
+  }
+
+  list.addEventListener("click", (e) => {
+    const wordLink = e.target.closest("a.vocab-word");
+    if (wordLink) {
+      store.set({ pendingDictionaryWord: wordLink.dataset.word });
+      return;
+    }
+    const prev = e.target.closest("button[data-pager='prev']");
+    if (prev && !prev.disabled) { offset = Math.max(0, offset - pageSize); load(); return; }
+    const next = e.target.closest("button[data-pager='next']");
+    if (next && !next.disabled) { offset += pageSize; load(); return; }
+  });
+
+  async function load() {
+    // "Today" in the browser's local timezone. DB timestamps are UTC, so we
+    // translate the local midnight window to UTC ISO bounds.
+    const { start, end } = todayUtcBounds();
+    // New words: added today. Reviewed words: reviewed today, any box.
+    const dateFilter = isNew
+      ? `added_after=${encodeURIComponent(start)}&added_before=${encodeURIComponent(end)}`
+      : `reviewed_after=${encodeURIComponent(start)}&reviewed_before=${encodeURIComponent(end)}`;
+    const qs = `lang=${encodeURIComponent(lang)}&${dateFilter}&limit=${pageSize}&offset=${offset}`;
+    const res = await api.get(`/api/vocab?${qs}`);
+    if (!res.ok) {
+      list.innerHTML = `<div class="card" style="border-left: 4px solid var(--danger)">${escapeHtml(res.error || "load failed")}</div>`;
+      return;
+    }
+    const { items, total } = res.data;
+    renderList(items || [], Number(total) || 0);
+  }
+
+  function renderList(items, total) {
+    if (!items.length) {
+      const msg = isNew
+        ? "No new words added today. Look up a word in Dictionary to add one."
+        : "No words reviewed today. Run a review session and grade words.";
+      list.innerHTML = `
+        <div class="empty-state">
+          <div class="empty-state__icon">📚</div>
+          <div class="empty-state__title">${msg}</div>
+        </div>`;
+      return;
+    }
+    list.innerHTML = `<div class="list">${items.map(renderRow).join("")}</div>` + renderPager(items.length, total);
+    bindSpeakButtons(list);
+  }
+
+  function renderPager(itemCount, total) {
+    if (!total) return "";
+    const totalPages = Math.max(1, Math.ceil(total / pageSize));
+    const currentPage = Math.floor(offset / pageSize) + 1;
+    const atStart = offset === 0;
+    const atEnd = offset + itemCount >= total;
+    return `
+      <div class="row" style="margin-top: var(--sp-3); justify-content: center">
+        <button class="btn btn--ghost btn--sm" data-pager="prev" ${atStart ? "disabled" : ""}>← Previous</button>
+        <span class="field__hint" style="margin: 0 var(--sp-2)">Page ${currentPage} of ${totalPages} · ${total} total</span>
+        <button class="btn btn--ghost btn--sm" data-pager="next" ${atEnd ? "disabled" : ""}>Next →</button>
+      </div>
+    `;
+  }
+
+  function renderRow(item) {
+    const box = clampBox(item.leitner_box);
+    const sourceBadge = item.source === "llm"
+      ? `<span class="badge badge--ai">AI</span>`
+      : item.source === "user"
+        ? `<span class="badge badge--user">You</span>`
+        : `<span class="badge badge--builtin">WordNet</span>`;
+    const pos = item.pos ? `<span class="badge badge--muted">${escapeHtml(item.pos)}</span>` : "";
+    const wordDisplay = item.word.replace(/_/g, " ");
+    return `
+      <article class="list-item" data-id="${item.id}">
+        <div class="list-item__badges">${sourceBadge}${pos}<span class="badge badge--muted">${escapeHtml(BOX_LABELS[box])}</span></div>
+        <div class="list-item__main"><strong><a href="#/dictionary" class="vocab-word" data-word="${escapeHtml(wordDisplay)}" data-lang="${escapeHtml(item.language)}" title="Look up in Dictionary">${escapeHtml(wordDisplay)}</a></strong>
+          <button type="button" class="word-card__speak" data-action="speak" data-word="${escapeHtml(wordDisplay)}" data-lang="${escapeHtml(item.language)}" aria-label="Pronounce ${escapeHtml(wordDisplay)}" title="Pronounce ${escapeHtml(wordDisplay)}">🔊</button>
+        </div>
+        ${item.glossary ? `<div class="list-item__meta">${escapeHtml(item.glossary)}</div>` : ""}
+        ${item.example ? `<div class="list-item__meta" style="color: var(--text-muted)"><em>${escapeHtml(item.example)}</em></div>` : ""}
+      </article>
+    `;
+  }
+
+  load();
+
+  moduleState.offset = () => offset;
+}
+
 // Persist the in-progress session so a quick detour to Settings
 // doesn't lose the user's place. Only worth saving when the user
 // is mid-session — the pre-session and finished screens contribute
 // nothing.
 export function saveState() {
+  const hash = window.location.hash || "#/review";
+  if (hash === "#/review/new" || hash === "#/review/reviewed") {
+    const offset = moduleState.offset ? moduleState.offset() : 0;
+    if (!offset) return null;
+    return { offset };
+  }
   if (!session || !session.items || !session.items.length) return null;
   return {
     items: session.items,
     idx: session.idx,
     lang: session.lang,
+    scope: session.scope,
+    revealed: session.revealed || {},
+    graded: session.graded || {},
   };
 }
 
 // Detach the keyboard handler so it doesn't fire on a different page.
 export function dispose() {
   document.removeEventListener("keydown", sessionKeyHandler);
+}
+
+function clampBox(v) {
+  const n = Number(v);
+  if (!Number.isFinite(n) || n < 1) return 1;
+  if (n > 5) return 5;
+  return Math.round(n);
+}
+
+// Return the [start, end) of "today" in the browser's local timezone,
+// expressed as UTC datetime strings matching the DB's stored format
+// ("YYYY-MM-DD HH:MM:SS", UTC). End is exclusive so we use start of tomorrow.
+function todayUtcBounds() {
+  const now = new Date();
+  const startLocal = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const endLocal = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+  const fmt = (d) => {
+    const iso = d.toISOString(); // "YYYY-MM-DDTHH:MM:SS.sssZ"
+    return iso.replace("T", " ").replace(/\.\d{3}Z$/, "");
+  };
+  return { start: fmt(startLocal), end: fmt(endLocal) };
 }
 
 function escapeHtml(s) {

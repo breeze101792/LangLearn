@@ -92,6 +92,8 @@ function currentHash() {
 // drop any global listeners the page registered on mount).
 const PAGES = [
   { hash: "#/review",      load: () => import("./pages/review.js") },
+  { hash: "#/review/new",  load: () => import("./pages/review.js") },
+  { hash: "#/review/reviewed", load: () => import("./pages/review.js") },
   { hash: "#/vocabulary",  load: () => import("./pages/vocabulary.js") },
   { hash: "#/structures",  load: () => import("./pages/structures.js") },
   { hash: "#/phrases",     load: () => import("./pages/phrases.js") },
@@ -153,7 +155,7 @@ async function route() {
 function pickRenderFn(mod, hash) {
   // Each page module exports a hash-named render function for back-compat
   // with the existing call sites in the older route() function.
-  if (hash === "#/review") return mod.renderReview;
+  if (hash === "#/review" || hash === "#/review/new" || hash === "#/review/reviewed") return mod.renderReview;
   if (hash === "#/vocabulary") return mod.renderVocabulary;
   if (hash === "#/structures") return mod.renderStructures;
   if (hash === "#/phrases") return mod.renderPhrases;

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import random
 import sqlite3
 import threading
 import time
@@ -211,17 +212,30 @@ def find_vocab_box(*, user_id: int, language: str, word: str) -> dict | None:
 
 
 def list_vocab(*, user_id: int, language: str, limit: int = 100, offset: int = 0,
-               box: int | None = None) -> list[dict]:
+               box: int | None = None, box_min: int | None = None,
+               box_max: int | None = None,
+               added_after: str | None = None, added_before: str | None = None,
+               reviewed_after: str | None = None, reviewed_before: str | None = None,
+               ) -> list[dict]:
     """List vocab rows for `language`, newest first.
 
     `box` (1-5) optionally restricts the result to items at that Leitner box;
-    this powers the Vocabulary page's per-level view.
+    this powers the Vocabulary page's per-level view. `box_min`/`box_max`
+    restrict to a range of boxes (e.g. 2-5 for "reviewed" words).
+
+    `added_after`/`added_before` and `reviewed_after`/`reviewed_before`
+    filter rows by their ``added_at`` / ``reviewed_at`` timestamps (inclusive
+    ISO datetimes). The Review page uses these to bound "today" in the
+    browser's local timezone.
     """
     if not is_valid_lang(language):
         raise ValueError("invalid language")
     limit = max(1, min(500, int(limit)))
     offset = max(0, int(offset))
-    where, params = _vocab_where(user_id, language, box)
+    where, params = _vocab_where(
+        user_id, language, box, box_min, box_max,
+        added_after, added_before, reviewed_after, reviewed_before,
+    )
     params += [limit, offset]
     with get_conn() as conn:
         rows = conn.execute(
@@ -232,14 +246,21 @@ def list_vocab(*, user_id: int, language: str, limit: int = 100, offset: int = 0
     return [dict(r) for r in rows]
 
 
-def count_vocab(*, user_id: int, language: str, box: int | None = None) -> int:
+def count_vocab(*, user_id: int, language: str, box: int | None = None,
+                box_min: int | None = None, box_max: int | None = None,
+                added_after: str | None = None, added_before: str | None = None,
+                reviewed_after: str | None = None, reviewed_before: str | None = None,
+                ) -> int:
     """Count vocab rows matching the same filter as ``list_vocab``.
 
     Used by the Vocabulary page to compute total pages for pagination.
     """
     if not is_valid_lang(language):
         raise ValueError("invalid language")
-    where, params = _vocab_where(user_id, language, box)
+    where, params = _vocab_where(
+        user_id, language, box, box_min, box_max,
+        added_after, added_before, reviewed_after, reviewed_before,
+    )
     with get_conn() as conn:
         row = conn.execute(
             f"SELECT COUNT(*) AS c FROM vocab_items WHERE {where}", params,
@@ -247,7 +268,11 @@ def count_vocab(*, user_id: int, language: str, box: int | None = None) -> int:
     return int(row["c"])
 
 
-def _vocab_where(user_id: int, language: str, box: int | None) -> tuple[str, list[Any]]:
+def _vocab_where(user_id: int, language: str, box: int | None = None,
+                 box_min: int | None = None, box_max: int | None = None,
+                 added_after: str | None = None, added_before: str | None = None,
+                 reviewed_after: str | None = None, reviewed_before: str | None = None,
+                 ) -> tuple[str, list[Any]]:
     where = "user_id=? AND language=?"
     params: list[Any] = [user_id, language]
     if box is not None:
@@ -255,6 +280,25 @@ def _vocab_where(user_id: int, language: str, box: int | None) -> tuple[str, lis
             raise ValueError(f"box must be between {leitner.MIN_BOX} and {leitner.MAX_BOX}")
         where += " AND leitner_box=?"
         params.append(box)
+    else:
+        if box_min is not None:
+            if not isinstance(box_min, int) or not (leitner.MIN_BOX <= box_min <= leitner.MAX_BOX):
+                raise ValueError(f"box_min must be between {leitner.MIN_BOX} and {leitner.MAX_BOX}")
+            where += " AND leitner_box>=?"
+            params.append(box_min)
+        if box_max is not None:
+            if not isinstance(box_max, int) or not (leitner.MIN_BOX <= box_max <= leitner.MAX_BOX):
+                raise ValueError(f"box_max must be between {leitner.MIN_BOX} and {leitner.MAX_BOX}")
+            where += " AND leitner_box<=?"
+            params.append(box_max)
+    for col, lo, hi in (("added_at", added_after, added_before),
+                        ("reviewed_at", reviewed_after, reviewed_before)):
+        if lo is not None:
+            where += f" AND {col}>=?"
+            params.append(str(lo))
+        if hi is not None:
+            where += f" AND {col}<=?"
+            params.append(str(hi))
     return where, params
 
 
@@ -283,20 +327,49 @@ def set_box(*, user_id: int, vocab_id: int, box: int) -> dict:
     return {"vocab_id": vocab_id, "leitner_box": box, "next_due": new_due}
 
 
-def review_next(*, user_id: int, language: str, n: int = 20) -> list[dict]:
+def review_next(*, user_id: int, language: str, n: int = 20,
+                box: int | None = None, shuffle: bool = False) -> list[dict]:
+    """Return the next `n` due items for `language`.
+
+    By default only items whose ``next_due`` has passed are returned. Pass
+    ``box`` (1-5) to restrict to a single Leitner box, or ``box=0`` to pull
+    from *every* box regardless of due date (used by the Review page's
+    "review all boxes" mode).
+
+    When ``shuffle`` is True the eligible pool is returned in random order
+    (used by the Review page so a session isn't the same every time). A
+    deterministic ORDER BY is still used to seed the row selection, then the
+    result set is shuffled before truncating to ``n``.
+    """
     if not is_valid_lang(language):
         raise ValueError("invalid language")
     n = max(1, min(50, int(n)))
+    where = "user_id=? AND language=?"
+    params: list[Any] = [user_id, language]
+    if box is not None:
+        if not isinstance(box, int) or not (0 <= box <= leitner.MAX_BOX):
+            raise ValueError(f"box must be between 0 and {leitner.MAX_BOX}")
+        if box == 0:
+            # Review across every box, ignoring due dates.
+            pass
+        else:
+            where += " AND leitner_box=?"
+            params.append(box)
+    else:
+        where += " AND next_due <= datetime('now')"
     with get_conn() as conn:
         rows = conn.execute(
             "SELECT id, language, word, pos, glossary, example,"
             "       explanation_primary, explanation_secondary,"
             "       leitner_box, next_due "
-            "FROM vocab_items WHERE user_id=? AND language=? AND next_due <= datetime('now') "
-            "ORDER BY next_due ASC LIMIT ?",
-            (user_id, language, n),
+            f"FROM vocab_items WHERE {where} "
+            "ORDER BY next_due ASC",
+            params,
         ).fetchall()
-    return [dict(r) for r in rows]
+    items = [dict(r) for r in rows]
+    if shuffle:
+        random.shuffle(items)
+    return items[:n]
 
 
 def apply_review_grade(*, user_id: int, vocab_id: int, grade_value: str) -> dict:
