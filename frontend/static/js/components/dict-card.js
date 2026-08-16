@@ -245,7 +245,7 @@ function renderVocabControl(vocabState) {
     const box = clampBox(vocabState.leitnerBox);
     return `<span class="badge badge--ok" data-vocab-badge="in-box" data-box="${box}" title="This word is in box ${box}">Box ${box}</span>`;
   }
-  return `<button type="button" class="btn btn--sm btn--ghost" data-action="add-to-vocab" title="Add this word to your vocabulary (box 1)">+ Add to vocab</button>`;
+  return `<button type="button" class="btn btn--sm btn--ghost" data-action="add-to-vocab" title="Add this word to your vocabulary (box 1)">+ Add</button>`;
 }
 
 function clampBox(v) {

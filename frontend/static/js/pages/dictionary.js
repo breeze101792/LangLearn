@@ -275,7 +275,7 @@ function renderSuggest(suggestEl, items, query) {
     } else {
       label = escapeHtml(w);
     }
-    return `<li class="autocomplete__item${i === 0 ? " is-active" : ""}" role="option" data-word="${escapeHtml(w)}">${label}</li>`;
+    return `<li class="autocomplete__item" role="option" data-word="${escapeHtml(w)}">${label}</li>`;
   }).join("");
   suggestEl.hidden = false;
   const input = document.getElementById("dict-search");
@@ -293,9 +293,15 @@ function moveSuggestSelection(suggestEl, delta) {
   const items = Array.from(suggestEl.querySelectorAll("li.autocomplete__item"));
   if (!items.length) return false;
   const cur = items.findIndex((el) => el.classList.contains("is-active"));
-  let next = cur + delta;
-  if (next < 0) next = items.length - 1;
-  if (next >= items.length) next = 0;
+  let next;
+  if (cur === -1) {
+    // Nothing selected yet: ArrowDown picks the first, ArrowUp the last.
+    next = delta > 0 ? 0 : items.length - 1;
+  } else {
+    next = cur + delta;
+    if (next < 0) next = items.length - 1;
+    if (next >= items.length) next = 0;
+  }
   items.forEach((el, i) => el.classList.toggle("is-active", i === next));
   items[next].scrollIntoView({ block: "nearest" });
   return true;
@@ -389,13 +395,15 @@ async function doLookup(word, lang, providerOverride) {
     resultHost.innerHTML = `<div class="empty-state"><div class="empty-state__msg">Type a word to look up.</div></div>`;
     return;
   }
-  showLoading(resultHost, word);
 
   // 1) local cache hit. A forced lookup asks for a specific source, so only
   // accept an entry produced by that provider; otherwise walk the chain in
   // order and use the first provider that has the word cached — this is what
   // resets the dictionary back to the leading provider on a fresh search.
   // A regenerate call forces a fresh fetch and skips the cache entirely.
+  // Checked BEFORE showing the loading state so switching back to a provider
+  // whose result is already cached renders instantly with no flash and no
+  // second network request.
   const chainOrder = switcherProviders(lang).map((p) => p.name);
   const cached = skipNextCache
     ? null
@@ -414,6 +422,9 @@ async function doLookup(word, lang, providerOverride) {
     maybeShowUndoToast(cached.word || word, lang, cached.autoAdded);
     return;
   }
+
+  // No cache hit — show the loading state and hit the server.
+  showLoading(resultHost, word);
 
   lastLookup.word = word;
   lastLookup.lang = lang;
