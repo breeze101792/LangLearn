@@ -709,16 +709,24 @@ body.nav-drawer-open { overflow: hidden; }
 
 /* Review card — its own card, holding the prompt + grade buttons. */
 .review-card {
-  display: flex; flex-direction: column; align-items: center;
-  text-align: center;
-  padding: var(--sp-8) var(--sp-4);
-  gap: var(--sp-3);
+  padding: var(--sp-5);
+}
+.review-card__head {
+  display: flex; align-items: center; gap: var(--sp-2);
+  margin-bottom: var(--sp-2);
 }
 .review-card__prompt { font-size: 32px; font-weight: 600; }
+.review-card__sub {
+  display: flex; align-items: baseline; gap: var(--sp-2);
+  margin-bottom: var(--sp-3);
+  flex-wrap: wrap;
+}
+.review-card__gloss { color: var(--text-primary); }
 .review-card__reading { font-size: 16px; color: var(--text-secondary); }
 .review-card__actions {
-  display: flex; gap: var(--sp-3); justify-content: center;
+  display: flex; gap: var(--sp-3); justify-content: flex-end;
   flex-wrap: wrap;
+  margin-top: var(--sp-3);
 }
 .review-card__loading {
   display: flex; align-items: center; gap: var(--sp-3);
