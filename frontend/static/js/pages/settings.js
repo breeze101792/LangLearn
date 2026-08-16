@@ -84,6 +84,10 @@ export function renderSettings(host) {
     bar.querySelector("#save-settings").addEventListener("click", saveAll);
     bar.querySelector("#revert-settings").addEventListener("click", () => {
       dirty = {};
+      // Restore the committed active language in case the top bar was
+      // live-updated while the picker was dirty.
+      store.set({ activeLanguage: settings.active_language });
+      renderLangSwitcher();
       renderSettings(host);
     });
   }
@@ -209,6 +213,10 @@ export function renderSettings(host) {
     });
     main.querySelector("#active-lang").addEventListener("change", (e) => {
       dirty.active_language = e.target.value;
+      // Reflect the pending active language in the top bar immediately so
+      // the user sees what will apply on save. Reverted on cancel.
+      store.set({ activeLanguage: e.target.value });
+      renderLangSwitcher();
       renderActions();
     });
     const ttsSelect = main.querySelector("#tts-provider");
@@ -404,24 +412,47 @@ export function renderSettings(host) {
     `;
     main.querySelectorAll("[data-action='seed']").forEach((btn) => {
       btn.addEventListener("click", async () => {
-        const lang = btn.closest("[data-lang]").dataset.lang;
-        const seeded = btn.closest("[data-lang]").querySelector(".badge--ok");
+        const item = btn.closest("[data-lang]");
+        const lang = item.dataset.lang;
+        const seeded = item.querySelector(".badge--ok");
         if (seeded) {
           if (!confirm("Re-seed replaces existing seeded content. Continue?")) return;
         }
-        const res = await api.post(`/api/languages/${lang}/initialize`, { force: seeded });
-        if (!res.ok) {
-          toast({ title: "Seeding failed", message: res.error, variant: "error" });
-          return;
+        const badge = item.querySelector(".badge--ok, .badge--muted");
+        const origText = btn.innerHTML;
+        const origBadge = badge ? badge.innerHTML : "";
+        btn.disabled = true;
+        btn.innerHTML = `<span class="spinner spinner--sm" aria-hidden="true"></span> Seeding…`;
+        item.classList.add("is-seeding");
+        if (badge) {
+          badge.innerHTML = `<span class="spinner spinner--sm" aria-hidden="true"></span> Seeding…`;
+          badge.classList.add("badge--warn");
         }
-        const r = await api.get("/api/languages");
-        if (r.ok) store.set({ languages: r.data });
-        renderSettings(document.getElementById("app-main"));
-        toast({
-          title: `${lang} re-initialized`,
-          message: `${res.data.structures || 0} structures, ${res.data.phrases || 0} phrases`,
-          variant: "success",
-        });
+        try {
+          const res = await api.post(`/api/languages/${lang}/initialize`, { force: seeded });
+          if (!res.ok) {
+            toast({ title: "Seeding failed", message: res.error, variant: "error" });
+            return;
+          }
+          const r = await api.get("/api/languages");
+          if (r.ok) store.set({ languages: r.data });
+          renderSettings(document.getElementById("app-main"));
+          toast({
+            title: `${lang} re-initialized`,
+            message: `${res.data.structures || 0} structures, ${res.data.phrases || 0} phrases`,
+            variant: "success",
+          });
+        } finally {
+          if (document.body.contains(item)) {
+            btn.disabled = false;
+            btn.innerHTML = origText;
+            item.classList.remove("is-seeding");
+            if (badge) {
+              badge.innerHTML = origBadge;
+              badge.classList.remove("badge--warn");
+            }
+          }
+        }
       });
     });
     main.querySelectorAll("[data-action='apply-explanations']").forEach((btn) => {

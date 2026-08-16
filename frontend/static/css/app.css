@@ -480,6 +480,7 @@ body.nav-drawer-open { overflow: hidden; }
 }
 .list-item--builtin { border-left: 4px solid var(--border-strong); }
 .list-item--familiar { opacity: 0.72; }
+.list-item.is-seeding { opacity: 0.7; }
 .list-item__main { color: var(--text-primary); }
 .list-item__meta { color: var(--text-secondary); font-size: 14px; }
 .list-item__meta-label { color: var(--text-muted); font-weight: 500; margin-right: 4px; }
