@@ -2,9 +2,7 @@
 
 const ROUTES = [
   { hash: "#/dictionary", label: "Dictionary" },
-  { hash: "#/analyze",    label: "Analyze" },
-  { hash: "#/refine",     label: "Refine" },
-  { hash: "#/translate",  label: "Translate" },
+  { hash: "#/assist",     label: "Assist" },
   { hash: "#/learn",     label: "Learn" },
   { hash: "#/vocabulary", label: "Vocabulary" },
   { hash: "#/structures", label: "Structures" },

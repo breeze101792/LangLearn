@@ -97,9 +97,9 @@ const PAGES = [
   { hash: "#/vocabulary",  load: () => import("./pages/vocabulary.js") },
   { hash: "#/structures",  load: () => import("./pages/structures.js") },
   { hash: "#/phrases",     load: () => import("./pages/phrases.js") },
-  { hash: "#/analyze",     load: () => import("./pages/analyze.js") },
-  { hash: "#/refine",      load: () => import("./pages/refine.js") },
-  { hash: "#/translate",   load: () => import("./pages/translate.js") },
+  { hash: "#/assist",           load: () => import("./pages/assist.js") },
+  { hash: "#/assist/refine",    load: () => import("./pages/assist.js") },
+  { hash: "#/assist/translate", load: () => import("./pages/assist.js") },
   { hash: "#/settings",    load: () => import("./pages/settings.js") },
   { hash: "#/dictionary",  load: () => import("./pages/dictionary.js") },
 ];
@@ -159,9 +159,7 @@ function pickRenderFn(mod, hash) {
   if (hash === "#/vocabulary") return mod.renderVocabulary;
   if (hash === "#/structures") return mod.renderStructures;
   if (hash === "#/phrases") return mod.renderPhrases;
-  if (hash === "#/analyze") return mod.renderAnalyze;
-  if (hash === "#/refine") return mod.renderRefine;
-  if (hash === "#/translate") return mod.renderTranslate;
+  if (hash === "#/assist" || hash === "#/assist/refine" || hash === "#/assist/translate") return mod.renderAssist;
   if (hash === "#/settings") return mod.renderSettings;
   return mod.renderDictionary;
 }

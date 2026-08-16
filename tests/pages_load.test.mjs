@@ -102,9 +102,9 @@ const PAGES = [
   { hash: "#/vocabulary",  mod: "../frontend/static/js/pages/vocabulary.js",  render: "renderVocabulary" },
   { hash: "#/structures",  mod: "../frontend/static/js/pages/structures.js",  render: "renderStructures" },
   { hash: "#/phrases",     mod: "../frontend/static/js/pages/phrases.js",     render: "renderPhrases" },
-  { hash: "#/analyze",     mod: "../frontend/static/js/pages/analyze.js",     render: "renderAnalyze" },
-  { hash: "#/refine",      mod: "../frontend/static/js/pages/refine.js",      render: "renderRefine" },
-  { hash: "#/translate",   mod: "../frontend/static/js/pages/translate.js",   render: "renderTranslate" },
+  { hash: "#/assist",           mod: "../frontend/static/js/pages/assist.js",    render: "renderAssist" },
+  { hash: "#/assist/refine",    mod: "../frontend/static/js/pages/assist.js",    render: "renderAssist" },
+  { hash: "#/assist/translate", mod: "../frontend/static/js/pages/assist.js",    render: "renderAssist" },
   { hash: "#/settings",    mod: "../frontend/static/js/pages/settings.js",    render: "renderSettings" },
   { hash: "#/dictionary",  mod: "../frontend/static/js/pages/dictionary.js",  render: "renderDictionary" },
 ];
