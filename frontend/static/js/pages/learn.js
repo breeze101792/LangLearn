@@ -133,11 +133,12 @@ async function renderPreSession(host, lang) {
   const data = status.data || {};
   const due = data.due || 0;
   const counts = data.by_box || {};
+  const totalCount = Object.values(counts).reduce((acc, n) => acc + (n || 0), 0);
   host.innerHTML = `
     <div class="card">
       <h2 class="card__title">Ready to review</h2>
       <p style="margin: var(--sp-2) 0"><strong>${due}</strong> word${due === 1 ? "" : "s"} due · session size: ${sessionSize}</p>
-      <p class="field__hint">Box 1 (new): ${counts[1] || 0} · Box 2: ${counts[2] || 0} · Box 3: ${counts[3] || 0} · Box 4: ${counts[4] || 0} · Box 5: ${counts[5] || 0}</p>
+      <p class="field__hint">Due: ${due} · All: ${totalCount} · Box 1 (new): ${counts[1] || 0} · Box 2: ${counts[2] || 0} · Box 3: ${counts[3] || 0} · Box 4: ${counts[4] || 0} · Box 5: ${counts[5] || 0}</p>
       <div class="field" style="margin-top: var(--sp-3)">
         <label class="field__label" for="review-scope">Review scope</label>
         <div class="segmented" id="review-scope" role="tablist" aria-label="Review scope">
@@ -251,7 +252,8 @@ function renderGradedCard(host, item) {
   const resultHost = host.querySelector("#review-result");
   const answerHost = host.querySelector("#review-answer");
 
-  const cached = findCachedRecord(item.language, item.word);
+  const cached = findCachedRecord(item.language, item.word, undefined,
+    switcherListFor(item.language).map((p) => p.name));
   const entry = (cached && cached.entry) || entryFromVocabRow(item);
   const initialSource = (cached && cached.source) || item.source || "";
 
@@ -289,15 +291,18 @@ async function reveal(host, item, replay = false) {
   const resultHost = host.querySelector("#review-result");
   const answerHost = host.querySelector("#review-answer");
 
-  // Prefer the cached full WordEntry from the Dictionary page so the review
-  // reveal shows the same rich layout (all senses, explanations, examples).
-  // Fall back to building a one-sense entry from the vocab row.
-  const cached = findCachedRecord(item.language, item.word);
-  const entry = (cached && cached.entry) || entryFromVocabRow(item);
-  const initialSource = (cached && cached.source) || item.source || "";
-
   await ensureProviderMeta(item.language);
   const providers = switcherListFor(item.language);
+  const chainOrder = providers.map((p) => p.name);
+
+  // Prefer the cached full WordEntry from the Dictionary page so the review
+  // reveal shows the same rich layout (all senses, explanations, examples).
+  // Walk the chain in order (like the Dictionary page) so the highlighted
+  // source matches the chain's leading provider, not the most recent fetch.
+  // Fall back to building a one-sense entry from the vocab row.
+  const cached = findCachedRecord(item.language, item.word, undefined, chainOrder);
+  const entry = (cached && cached.entry) || entryFromVocabRow(item);
+  const initialSource = (cached && cached.source) || item.source || "";
 
   // Render the dictionary entry as a single card (no doubled .card
   // wrapper). The provider switcher, vocab control, and speak buttons

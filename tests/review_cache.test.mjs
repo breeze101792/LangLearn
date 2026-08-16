@@ -141,5 +141,55 @@ test("looks up the word case-insensitively (matches the cache key shape)", () =>
   assert(r.source === "wordnet");
 });
 
+test("honors chainOrder: returns the leading provider that has a cached entry", () => {
+  // Even when LLM was fetched more recently, the chain-leading provider
+  // (wordnet) must win so the review card matches the Dictionary page.
+  const s = fakeStorage();
+  seedWord(s, "en", "run", {
+    wordnet: { entry: { word: "run", fromWordnet: true }, source: "wordnet", fetchedAt: 50 },
+    llm:     { entry: { word: "run", fromLlm: true },     source: "llm",      fetchedAt: 200 },
+  });
+  const r = findCachedRecord("en", "run", s, ["wordnet", "llm"]);
+  assert(r !== null, "expected a record");
+  assert(r.entry && r.entry.fromWordnet === true, "should pick the chain-leading provider (wordnet)");
+  assert(r.source === "wordnet", "source should be wordnet");
+});
+
+test("chainOrder skips providers with no cached entry and falls to the next", () => {
+  const s = fakeStorage();
+  seedWord(s, "en", "dog", {
+    llm: { entry: { word: "dog", fromLlm: true }, source: "llm", fetchedAt: 100 },
+  });
+  const r = findCachedRecord("en", "dog", s, ["wordnet", "llm"]);
+  assert(r !== null, "expected a record");
+  assert(r.entry && r.entry.fromLlm === true, "should fall through to llm since wordnet has no entry");
+  assert(r.source === "llm", "source should be llm");
+});
+
+test("chainOrder falls back to most-recent when no chain provider has an entry", () => {
+  const s = fakeStorage();
+  seedWord(s, "en", "fox", {
+    user: { entry: { word: "fox", fromUser: true }, source: "user", fetchedAt: 300 },
+  });
+  const r = findCachedRecord("en", "fox", s, ["wordnet", "llm"]);
+  assert(r !== null, "expected a record");
+  assert(r.entry && r.entry.fromUser === true, "should fall back to the only cached entry");
+  assert(r.source === "user", "source should be user");
+});
+
+test("empty or non-array chainOrder falls back to most-recent behaviour", () => {
+  const s = fakeStorage();
+  seedWord(s, "en", "owl", {
+    wordnet: { entry: { word: "owl", fromWordnet: true }, source: "wordnet", fetchedAt: 50 },
+    llm:     { entry: { word: "owl", fromLlm: true },     source: "llm",      fetchedAt: 200 },
+  });
+  const r1 = findCachedRecord("en", "owl", s, []);
+  assert(r1.source === "llm", "empty chainOrder should pick most recent");
+  const r2 = findCachedRecord("en", "owl", s, null);
+  assert(r2.source === "llm", "null chainOrder should pick most recent");
+  const r3 = findCachedRecord("en", "owl", s);
+  assert(r3.source === "llm", "omitted chainOrder should pick most recent");
+});
+
 console.log(`\n${passed} passed, ${failures} failed`);
 process.exit(failures === 0 ? 0 : 1);

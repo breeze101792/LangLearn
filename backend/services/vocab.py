@@ -359,7 +359,7 @@ def review_next(*, user_id: int, language: str, n: int = 20,
         where += " AND next_due <= datetime('now')"
     with get_conn() as conn:
         rows = conn.execute(
-            "SELECT id, language, word, pos, glossary, example,"
+            "SELECT id, language, word, source, pos, glossary, example,"
             "       explanation_primary, explanation_secondary,"
             "       leitner_box, next_due "
             f"FROM vocab_items WHERE {where} "
