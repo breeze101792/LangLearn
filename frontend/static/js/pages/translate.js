@@ -4,8 +4,8 @@
 // and a short grammar note. The source language is auto-detected by
 // the model; the target language is the user's active language.
 //
-// Nothing is saved: this is a quick utility. The result is rebuilt on
-// every click.
+// The textarea text and the last translation result are persisted via
+// page-state.js so switching tabs and returning keeps everything.
 
 import { api } from "../api.js";
 import { store } from "../state.js";
@@ -20,6 +20,8 @@ export function renderTranslate(host) {
   const languages = state.languages || [];
   const restored = consumeRestoredState();
   const targetName = langDisplayName(targetLang, languages);
+
+  let lastResult = null;
 
   host.innerHTML = `
     <header class="page-head">
@@ -56,8 +58,14 @@ export function renderTranslate(host) {
   });
   btn.addEventListener("click", runTranslate);
 
+  // Restore the user's text and the previous translation result so a
+  // quick detour doesn't lose work.
   if (restored && typeof restored === "object" && typeof restored.text === "string") {
     textarea.value = restored.text;
+    if (restored.lastResult && typeof restored.lastResult === "object") {
+      lastResult = restored.lastResult;
+      renderResult(result, lastResult, targetName);
+    }
   }
 
   async function runTranslate() {
@@ -88,7 +96,8 @@ export function renderTranslate(host) {
           </div>`;
         return;
       }
-      renderResult(result, res.data, targetName);
+      lastResult = res.data || null;
+      renderResult(result, lastResult, targetName);
     } finally {
       btn.disabled = false;
       btn.textContent = original;
@@ -202,11 +211,11 @@ function escapeHtml(s) {
     .replace(/'/g, "&#39;");
 }
 
-// Persist the textarea so a quick detour to another page doesn't lose
-// work in progress.
+// Persist the textarea contents and the last translation result so a
+// quick detour to another page doesn't lose work.
 export function saveState() {
   const textarea = document.getElementById("translate-text");
   const text = textarea ? textarea.value : "";
-  if (!text) return null;
-  return { text };
+  if (!text && !lastResult) return null;
+  return { text, lastResult };
 }

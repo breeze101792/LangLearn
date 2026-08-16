@@ -2,8 +2,8 @@
 // grammar-corrected version, a more idiomatic native-speaker version, a
 // list of small in-place edits with reasons, and a short explanation.
 //
-// Nothing is saved: this is a quick utility. The result is rebuilt on
-// every click.
+// The textarea text and the last refine result are persisted via
+// page-state.js so switching tabs and returning keeps everything.
 
 import { api } from "../api.js";
 import { store } from "../state.js";
@@ -17,6 +17,8 @@ export function renderRefine(host) {
   const secondary = (state.settings && state.settings.explanation_secondary) || null;
   const languages = state.languages || [];
   const restored = consumeRestoredState();
+
+  let lastResult = null;
 
   host.innerHTML = `
     <header class="page-head">
@@ -52,10 +54,14 @@ export function renderRefine(host) {
   });
   btn.addEventListener("click", runRefine);
 
-  // Restore the user's text. The refined output is not persisted
-  // — the user knows what they refined and can re-run if needed.
+  // Restore the user's text and the previous refine result so a
+  // quick detour doesn't lose work.
   if (restored && typeof restored === "object" && typeof restored.text === "string") {
     textarea.value = restored.text;
+    if (restored.lastResult && typeof restored.lastResult === "object") {
+      lastResult = restored.lastResult;
+      renderResult(result, lastResult);
+    }
   }
 
   async function runRefine() {
@@ -86,7 +92,8 @@ export function renderRefine(host) {
           </div>`;
         return;
       }
-      renderResult(result, res.data);
+      lastResult = res.data || null;
+      renderResult(result, lastResult);
     } finally {
       btn.disabled = false;
       btn.textContent = original;
@@ -229,11 +236,11 @@ function escapeHtml(s) {
     .replace(/'/g, "&#39;");
 }
 
-// Persist the textarea contents. Only the text is worth saving; the
-// refined output is large and the user can re-run it cheaply.
+// Persist the textarea contents and the last refine result so a
+// quick detour to another page doesn't lose work.
 export function saveState() {
   const textarea = document.getElementById("refine-text");
   const text = textarea ? textarea.value : "";
-  if (!text) return null;
-  return { text };
+  if (!text && !lastResult) return null;
+  return { text, lastResult };
 }
