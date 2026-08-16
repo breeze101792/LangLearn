@@ -16,6 +16,7 @@ DEFAULTS: dict[str, Any] = {
     "active_language": config.DEFAULT_LANGUAGE,
     "auto_add_vocab": 1,
     "page_size": 20,
+    "review_session_size": 30,
     "explanation_primary": "en",
     "explanation_secondary": None,
     "dict_chain_json": {},
@@ -62,14 +63,15 @@ def create_default_settings(user_id: int = config.DEFAULT_USER_ID) -> None:
         conn.execute(
             "INSERT OR IGNORE INTO settings ("
             "  user_id, active_language, auto_add_vocab, page_size,"
-            "  explanation_primary, explanation_secondary, dict_chain_json,"
-            "  theme, show_readings, tts_provider"
-            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "  review_session_size, explanation_primary, explanation_secondary,"
+            "  dict_chain_json, theme, show_readings, tts_provider"
+            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 user_id,
                 DEFAULTS["active_language"],
                 DEFAULTS["auto_add_vocab"],
                 DEFAULTS["page_size"],
+                DEFAULTS["review_session_size"],
                 DEFAULTS["explanation_primary"],
                 DEFAULTS["explanation_secondary"],
                 chain_json,
@@ -142,13 +144,13 @@ def _coerce(key: str, value: Any) -> Any:
         return value
     if key == "auto_add_vocab" or key == "show_readings":
         return 1 if _truthy(value) else 0
-    if key == "page_size":
+    if key == "page_size" or key == "review_session_size":
         try:
             n = int(value)
         except (TypeError, ValueError):
-            raise ValueError("page_size must be int")
+            raise ValueError(f"{key} must be int")
         if not 5 <= n <= 50:
-            raise ValueError("page_size must be between 5 and 50")
+            raise ValueError(f"{key} must be between 5 and 50")
         return n
     if key == "theme":
         if value not in ("auto", "light", "dark"):
@@ -251,4 +253,10 @@ def _row_to_dict(row) -> dict:
         out["tts_provider"] = row["tts_provider"]
     except (IndexError, KeyError):
         out["tts_provider"] = DEFAULTS["tts_provider"]
+    # `review_session_size` is added in migration 009; older DB rows may
+    # not have the column. Tolerate that with a fallback to the default.
+    try:
+        out["review_session_size"] = row["review_session_size"]
+    except (IndexError, KeyError):
+        out["review_session_size"] = DEFAULTS["review_session_size"]
     return out

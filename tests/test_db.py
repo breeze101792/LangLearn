@@ -104,8 +104,8 @@ def test_migration_renames_review_session_size(temp_data_dir):
                      "  applied_at TEXT NOT NULL DEFAULT (datetime('now'))"
                      ")")
         for sql_file in sorted(config.MIGRATIONS_DIR.glob("*.sql")):
-            if sql_file.name == "003_rename_page_size.sql":
-                continue  # skip the rename; we're simulating pre-003
+            if sql_file.name not in ("001_init.sql", "002_unique_word.sql"):
+                continue  # simulate a pre-003 DB: only 001 and 002 applied
             conn.executescript(sql_file.read_text(encoding="utf-8"))
             conn.execute(
                 "INSERT OR IGNORE INTO schema_migrations (filename) VALUES (?)",
@@ -147,7 +147,8 @@ def test_migration_renames_review_session_size(temp_data_dir):
         applied = {r["filename"] for r in conn.execute("SELECT filename FROM schema_migrations")}
 
     assert "page_size" in cols_after
-    assert "review_session_size" not in cols_after
+    assert "review_session_size" in cols_after
     assert "003_rename_page_size.sql" in applied
+    assert "009_review_session_size.sql" in applied
     # The existing user value must survive the rename.
     assert row["page_size"] == 35

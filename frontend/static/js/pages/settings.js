@@ -120,7 +120,11 @@ export function renderSettings(host) {
             </div>
           </div>
           <div class="settings__row">
-            <div class="settings__row__label">Page size (review session / vocabulary list)</div>
+            <div class="settings__row__label">Review session size</div>
+            <input id="r-review-size" type="number" min="5" max="50" step="5" class="input" style="max-width: 120px" value="${s.review_session_size || 30}">
+          </div>
+          <div class="settings__row">
+            <div class="settings__row__label">Page size (vocabulary / structures / phrases)</div>
             <input id="r-size" type="number" min="5" max="50" step="5" class="input" style="max-width: 120px" value="${s.page_size || 20}">
           </div>
           <div class="settings__row">
@@ -190,6 +194,10 @@ export function renderSettings(host) {
         applyTheme(btn.dataset.theme);
         renderActions();
       });
+    });
+    main.querySelector("#r-review-size").addEventListener("change", (e) => {
+      const v = parseInt(e.target.value, 10);
+      if (v >= 5 && v <= 50) { dirty.review_session_size = v; renderActions(); }
     });
     main.querySelector("#r-size").addEventListener("change", (e) => {
       const v = parseInt(e.target.value, 10);

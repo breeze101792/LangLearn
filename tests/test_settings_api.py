@@ -26,6 +26,7 @@ def test_get_settings_creates_defaults(fresh):
     assert data["active_language"] == "en"
     assert data["auto_add_vocab"] is True
     assert data["page_size"] == 20
+    assert data["review_session_size"] == 30
 
 
 def test_update_settings_persists(fresh):
@@ -206,7 +207,7 @@ def test_settings_response_includes_all_keys(fresh):
     r = client.get("/api/settings")
     data = r.get_json()["data"]
     for key in ("active_language", "auto_add_vocab", "page_size",
-                 "explanation_primary", "explanation_secondary",
-                 "dict_chain_json", "theme", "show_readings",
-                 "tts_provider"):
+                 "review_session_size", "explanation_primary",
+                 "explanation_secondary", "dict_chain_json", "theme",
+                 "show_readings", "tts_provider"):
         assert key in data

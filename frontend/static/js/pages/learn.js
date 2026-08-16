@@ -125,7 +125,7 @@ function renderSessionPage(host) {
 async function renderPreSession(host, lang) {
   const status = await api.get(`/api/vocab/review/status?lang=${encodeURIComponent(lang)}`);
   const settings = store.get().settings || {};
-  const sessionSize = settings.page_size || 20;
+  const sessionSize = settings.review_session_size || settings.page_size || 30;
   if (!status.ok) {
     host.innerHTML = `<div class="card" style="border-left: 4px solid var(--danger)">${escapeHtml(status.error)}</div>`;
     return;
