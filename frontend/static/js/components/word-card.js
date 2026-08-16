@@ -21,7 +21,6 @@ const SECONDARY_LANG_KEY = "secondary";
  * @param {boolean} [opts.compact]  - hide head/source badge; used in review card
  */
 export function renderWordCard(entry, opts = {}) {
-  const languages = opts.languages || [];
   const source = opts.source || entry.source || "";
   const compact = !!opts.compact;
   const senses = normalizeSenses(entry);
@@ -45,10 +44,14 @@ export function renderWordCard(entry, opts = {}) {
   const body = senses.length === 0
     ? `<div class="field__hint">No sense data available.</div>`
     : `<ol class="word-card__senses" style="list-style: none; padding-left: 0; margin: 0">
-        ${senses.map((s, i) => renderSense(s, i + 1, languages, opts)).join("")}
+        ${senses.map((s, i) => renderSense(s, i + 1, opts)).join("")}
       </ol>`;
 
-  return `<article class="card word-card">${head}${body}</article>`;
+  // `bare` strips the .card chrome so the entry can nest inside another
+  // card surface (e.g. the Review page's result card). Used by callers
+  // that already wrap the word card in their own .card.
+  const wrapperClass = opts.bare ? "word-card" : "card word-card";
+  return `<article class="${wrapperClass}">${head}${body}</article>`;
 }
 
 /**
@@ -115,7 +118,7 @@ function normalizeSenses(entry) {
   return [];
 }
 
-function renderSense(sense, n, languages, opts) {
+function renderSense(sense, n, opts) {
   const defs = (sense.definitions || []).map((d) => {
     const ex = d.example
       ? `<div class="word-card__sense__example">"${escapeHtml(d.example)}"</div>`
@@ -123,8 +126,8 @@ function renderSense(sense, n, languages, opts) {
     return `<div>${n}. ${escapeHtml(d.glossary || "")}${ex}</div>`;
   }).join("");
   const expls = sense.explanations || {};
-  const primaryLabel = explainLabel(opts.explanationPrimary, languages);
-  const secondaryLabel = explainLabel(opts.explanationSecondary, languages);
+  const primaryLabel = explainLabel(opts.explanationPrimary);
+  const secondaryLabel = explainLabel(opts.explanationSecondary);
   const explHtml = `
     <div class="word-card__sense__expl">
       ${expls.primary ? `<div class="expl-line"><span class="ll-tag">${escapeHtml(primaryLabel)}</span><span>${escapeHtml(expls.primary)}</span></div>` : ""}
@@ -135,8 +138,10 @@ function renderSense(sense, n, languages, opts) {
     ? ` <span class="badge badge--ai">AI</span>` : "";
   return `
     <li class="word-card__sense">
-      <div class="word-card__sense__gloss">
+      <div class="word-card__sense__pos-line">
         <span class="word-card__pos">${escapeHtml(sense.pos || "—")}</span>${sourceBadgeInline}
+      </div>
+      <div class="word-card__sense__gloss">
         ${defs}
       </div>
       ${explHtml}
@@ -150,11 +155,8 @@ function sourceBadge(source) {
   return "";
 }
 
-function explainLabel(code, languages) {
-  if (!code) return "—";
-  const lang = (languages || []).find((l) => l.code === code);
-  if (lang) return lang.display_name;
-  return code;
+function explainLabel(code) {
+  return code || "—";
 }
 
 function escapeHtml(s) {

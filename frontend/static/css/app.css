@@ -365,6 +365,10 @@ body.nav-drawer-open { overflow: hidden; }
   display: flex; align-items: baseline; gap: var(--sp-2);
   flex-wrap: wrap;
 }
+.word-card__sense__pos-line {
+  display: flex; align-items: baseline; gap: var(--sp-2);
+  margin-bottom: var(--sp-1);
+}
 .word-card__sense__example {
   margin-top: var(--sp-2);
   padding: var(--sp-2) var(--sp-3);
