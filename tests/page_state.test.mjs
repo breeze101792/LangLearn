@@ -58,7 +58,7 @@ function setup() {
 // `isRestorableHash`: only #/settings is excluded.
 test("isRestorableHash rejects #/settings", () => {
   assert(isRestorableHash("#/dictionary") === true);
-  assert(isRestorableHash("#/review") === true);
+  assert(isRestorableHash("#/learn") === true);
   assert(isRestorableHash("#/vocabulary") === true);
   assert(isRestorableHash("#/structures") === true);
   assert(isRestorableHash("#/phrases") === true);

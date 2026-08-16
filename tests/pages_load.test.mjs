@@ -96,9 +96,9 @@ function assert(cond, msg) {
 // silently falls back to the dictionary, which is hard to notice
 // without clicking every link.
 const PAGES = [
-  { hash: "#/review",      mod: "../frontend/static/js/pages/review.js",      render: "renderReview" },
-  { hash: "#/review/new",  mod: "../frontend/static/js/pages/review.js",      render: "renderReview" },
-  { hash: "#/review/reviewed", mod: "../frontend/static/js/pages/review.js",  render: "renderReview" },
+  { hash: "#/learn",           mod: "../frontend/static/js/pages/learn.js",      render: "renderLearn" },
+  { hash: "#/learn/new",       mod: "../frontend/static/js/pages/learn.js",      render: "renderLearn" },
+  { hash: "#/learn/reviewed",  mod: "../frontend/static/js/pages/learn.js",      render: "renderLearn" },
   { hash: "#/vocabulary",  mod: "../frontend/static/js/pages/vocabulary.js",  render: "renderVocabulary" },
   { hash: "#/structures",  mod: "../frontend/static/js/pages/structures.js",  render: "renderStructures" },
   { hash: "#/phrases",     mod: "../frontend/static/js/pages/phrases.js",     render: "renderPhrases" },

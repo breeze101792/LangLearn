@@ -1,10 +1,10 @@
-// Review page: recall session with Leitner grading, plus two list subpages
-// ("New words" = box 1, "Reviewed words" = boxes 2-5).
+// Learn page: recall session with Leitner grading, plus two list subpages
+// ("New words" = added today, "Reviewed words" = reviewed today).
 //
 // Routes:
-//   #/review            — the recall session (with a box scope selector)
-//   #/review/new        — list of box-1 (new) words
-//   #/review/reviewed   — list of boxes 2-5 (reviewed) words
+//   #/learn            — the recall session (with a box scope selector)
+//   #/learn/new        — list of words added today
+//   #/learn/reviewed   — list of words reviewed today
 
 import { api } from "../api.js";
 import { cache } from "../cache.js";
@@ -30,15 +30,17 @@ const BOX_LABELS = {
 // Review scope for the session. "due" = only items whose next_due passed
 // (the original behaviour). "all" = every box regardless of due date.
 // A number 1-5 = that single box.
-const SCOPE_LABELS = {
-  due: "Due",
-  all: "All boxes",
-  1: "Box 1",
-  2: "Box 2",
-  3: "Box 3",
-  4: "Box 4",
-  5: "Box 5",
-};
+// Order matters — kept as an array because JS object property iteration puts
+// integer-like keys (1..5) before string keys, breaking the intended order.
+const SCOPE_OPTIONS = [
+  { key: "due", label: "Due" },
+  { key: "all", label: "All boxes" },
+  { key: 1, label: "Box 1" },
+  { key: 2, label: "Box 2" },
+  { key: 3, label: "Box 3" },
+  { key: 4, label: "Box 4" },
+  { key: 5, label: "Box 5" },
+];
 
 let session = null; // { items, idx, lang, scope }
 // Provider metadata for the active language, loaded once per session so the
@@ -50,13 +52,13 @@ let providerMetaLang = null;
 // Live state for the list subpages, read by saveState() on navigation away.
 const moduleState = { activeBox: null, offset: null };
 
-export function renderReview(host) {
-  const hash = window.location.hash || "#/review";
-  if (hash === "#/review/new") {
+export function renderLearn(host) {
+  const hash = window.location.hash || "#/learn";
+  if (hash === "#/learn/new") {
     renderListPage(host, "new");
     return;
   }
-  if (hash === "#/review/reviewed") {
+  if (hash === "#/learn/reviewed") {
     renderListPage(host, "reviewed");
     return;
   }
@@ -69,9 +71,9 @@ export function renderReview(host) {
 
 function renderSubNav(host, active) {
   const items = [
-    { key: "review", hash: "#/review", label: "Review" },
-    { key: "new", hash: "#/review/new", label: "New words" },
-    { key: "reviewed", hash: "#/review/reviewed", label: "Reviewed words" },
+    { key: "review", hash: "#/learn", label: "Review" },
+    { key: "new", hash: "#/learn/new", label: "New words" },
+    { key: "reviewed", hash: "#/learn/reviewed", label: "Reviewed words" },
   ];
   host.insertAdjacentHTML("afterbegin", `
     <nav class="transfer-tabs" aria-label="Review subpages">
@@ -84,7 +86,7 @@ function renderSubNav(host, active) {
 }
 
 // ---------------------------------------------------------------------------
-// Main review session page (#/review)
+// Main review session page (#/learn)
 // ---------------------------------------------------------------------------
 
 function renderSessionPage(host) {
@@ -139,9 +141,9 @@ async function renderPreSession(host, lang) {
       <div class="field" style="margin-top: var(--sp-3)">
         <label class="field__label" for="review-scope">Review scope</label>
         <div class="segmented" id="review-scope" role="tablist" aria-label="Review scope">
-          ${Object.entries(SCOPE_LABELS).map(([key, label]) => `
-            <button class="segmented__item ${key === "due" ? "segmented__item--active" : ""}"
-                    data-scope="${key}" role="tab" aria-selected="${key === "due" ? "true" : "false"}">${escapeHtml(label)}</button>
+          ${SCOPE_OPTIONS.map((opt) => `
+            <button class="segmented__item ${opt.key === "due" ? "segmented__item--active" : ""}"
+                    data-scope="${opt.key}" role="tab" aria-selected="${opt.key === "due" ? "true" : "false"}">${escapeHtml(opt.label)}</button>
           `).join("")}
         </div>
         <p class="field__hint">"Due" reviews only words whose review date has passed. "All boxes" reviews every word regardless of date.</p>
@@ -443,7 +445,7 @@ function sessionKeyHandler(e) {
 }
 
 // ---------------------------------------------------------------------------
-// List subpages (#/review/new and #/review/reviewed)
+// List subpages (#/learn/new and #/learn/reviewed)
 // ---------------------------------------------------------------------------
 
 function renderListPage(host, kind) {
@@ -567,8 +569,8 @@ function renderListPage(host, kind) {
 // is mid-session — the pre-session and finished screens contribute
 // nothing.
 export function saveState() {
-  const hash = window.location.hash || "#/review";
-  if (hash === "#/review/new" || hash === "#/review/reviewed") {
+  const hash = window.location.hash || "#/learn";
+  if (hash === "#/learn/new" || hash === "#/learn/reviewed") {
     const offset = moduleState.offset ? moduleState.offset() : 0;
     if (!offset) return null;
     return { offset };
