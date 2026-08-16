@@ -227,7 +227,7 @@ function renderSession(host) {
   `;
   host.querySelector("#end-session").addEventListener("click", () => {
     session = null;
-    renderReview(document.getElementById("app-main"));
+    renderLearn(document.getElementById("app-main"));
   });
   host.querySelector("#nav-prev").addEventListener("click", () => go(host, -1));
   host.querySelector("#nav-next").addEventListener("click", () => go(host, +1));
@@ -414,7 +414,7 @@ function renderFinished(host, items) {
     </div>
   `;
   host.querySelector("#restart").addEventListener("click", () => {
-    renderReview(document.getElementById("app-main"));
+    renderLearn(document.getElementById("app-main"));
   });
 }
 
