@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import io
 import json as _json
 from unittest import mock
 
@@ -324,7 +325,7 @@ def test_describe_endpoint_rejects_invalid_language(monkeypatch):
     r = client.post(
         "/api/describe",
         data={
-            "file": (__import__("io").BytesIO(_PNG_BYTES), "pic.png", "image/png"),
+            "file": (io.BytesIO(_PNG_BYTES), "pic.png", "image/png"),
             "language": "xx",
         },
         content_type="multipart/form-data",
@@ -344,7 +345,7 @@ def test_describe_endpoint_empty_file_part_maps_to_400(monkeypatch):
     client = app.test_client()
     r = client.post(
         "/api/describe",
-        data={"file": (__import__("io").BytesIO(b""), "x.png", "image/png")},
+        data={"file": (io.BytesIO(b""), "x.png", "image/png")},
         content_type="multipart/form-data",
     )
     assert r.status_code == 400
@@ -360,7 +361,7 @@ def test_describe_endpoint_rejects_bad_mime(monkeypatch):
     client = app.test_client()
     r = client.post(
         "/api/describe",
-        data={"file": (__import__("io").BytesIO(b"not an image"), "x.pdf", "application/pdf")},
+        data={"file": (io.BytesIO(b"not an image"), "x.pdf", "application/pdf")},
         content_type="multipart/form-data",
     )
     assert r.status_code == 400
@@ -378,7 +379,7 @@ def test_describe_endpoint_rejects_oversized(monkeypatch):
     big = b"\x00" * (31 * 1024 * 1024)
     r = client.post(
         "/api/describe",
-        data={"file": (__import__("io").BytesIO(big), "big.png", "image/png")},
+        data={"file": (io.BytesIO(big), "big.png", "image/png")},
         content_type="multipart/form-data",
     )
     assert r.status_code == 400
@@ -418,7 +419,7 @@ def test_describe_endpoint_returns_description_and_words(monkeypatch):
     client = app.test_client()
     r = client.post(
         "/api/describe",
-        data={"file": (__import__("io").BytesIO(_PNG_BYTES), "pic.png", "image/png")},
+        data={"file": (io.BytesIO(_PNG_BYTES), "pic.png", "image/png")},
         content_type="multipart/form-data",
     )
     assert r.status_code == 200, r.get_json()
@@ -456,7 +457,7 @@ def test_describe_endpoint_defaults_lang_to_active_language(monkeypatch):
     client = app.test_client()
     r = client.post(
         "/api/describe",
-        data={"file": (__import__("io").BytesIO(_PNG_BYTES), "pic.png", "image/png")},
+        data={"file": (io.BytesIO(_PNG_BYTES), "pic.png", "image/png")},
         content_type="multipart/form-data",
     )
     assert r.status_code == 200
@@ -478,7 +479,7 @@ def test_describe_endpoint_llm_error_maps_to_502(monkeypatch):
     monkeypatch.setattr("backend.services.llm.requests.post", fake_post)
     r = client.post(
         "/api/describe",
-        data={"file": (__import__("io").BytesIO(_PNG_BYTES), "pic.png", "image/png")},
+        data={"file": (io.BytesIO(_PNG_BYTES), "pic.png", "image/png")},
         content_type="multipart/form-data",
     )
     assert r.status_code == 502
