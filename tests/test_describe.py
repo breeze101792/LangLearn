@@ -253,6 +253,104 @@ def test_describe_endpoint_rejects_missing_file():
     assert body["code"] == "invalid_input"
 
 
+def test_describe_endpoint_raw_body_happy_path(monkeypatch):
+    """A raw body upload (no multipart) with a recognized Content-Type
+    should be accepted and return a description."""
+    from backend.app import create_app
+    from backend.db import init_schema
+    from backend.services import settings as settings_svc
+    init_schema()
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://example.invalid/v1")
+    settings_svc.update_settings({
+        "active_language": "en",
+        "explanation_primary": "zh",
+        "explanation_secondary": None,
+    })
+    payload = {
+        "description": "A red bicycle leaning against a wall.",
+        "words": [
+            {"word": "bicycle", "pos": "noun", "glossary": "A two-wheeled vehicle."},
+        ],
+    }
+
+    def fake_post(url, json=None, headers=None, timeout=None):
+        return _mock_openai_response(_json.dumps(payload))
+
+    monkeypatch.setattr("backend.services.llm.requests.post", fake_post)
+    app = create_app()
+    client = app.test_client()
+    r = client.post("/api/describe", data=_PNG_BYTES, content_type="image/png")
+    assert r.status_code == 200, r.get_json()
+    data = r.get_json()["data"]
+    assert "bicycle" in data["description"]
+    assert data["words"][0]["word"] == "bicycle"
+
+
+def test_describe_endpoint_raw_body_empty(monkeypatch):
+    """A raw body upload with no bytes should be rejected as invalid."""
+    from backend.app import create_app
+    from backend.db import init_schema
+    init_schema()
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://example.invalid/v1")
+    app = create_app()
+    client = app.test_client()
+    r = client.post("/api/describe", data=b"", content_type="image/png")
+    assert r.status_code == 400
+    assert r.get_json()["code"] == "invalid_input"
+
+
+def test_describe_endpoint_raw_body_oversized(monkeypatch):
+    """A raw body upload larger than the cap should be rejected."""
+    from backend.app import create_app
+    from backend.db import init_schema
+    init_schema()
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://example.invalid/v1")
+    app = create_app()
+    client = app.test_client()
+    big = b"\x00" * (31 * 1024 * 1024)
+    r = client.post("/api/describe", data=big, content_type="image/png")
+    assert r.status_code == 400
+    assert r.get_json()["code"] == "invalid_input"
+
+
+def test_describe_endpoint_rejects_invalid_language(monkeypatch):
+    """An explicit language that isn't in the catalog should be rejected."""
+    from backend.app import create_app
+    from backend.db import init_schema
+    init_schema()
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://example.invalid/v1")
+    app = create_app()
+    client = app.test_client()
+    r = client.post(
+        "/api/describe",
+        data={
+            "file": (__import__("io").BytesIO(_PNG_BYTES), "pic.png", "image/png"),
+            "language": "xx",
+        },
+        content_type="multipart/form-data",
+    )
+    assert r.status_code == 400
+    assert r.get_json()["code"] == "invalid_lang"
+
+
+def test_describe_endpoint_empty_file_part_maps_to_400(monkeypatch):
+    """An empty file part passes the mime check but the LLM service raises
+    ValueError (empty image bytes), which the blueprint maps to 400."""
+    from backend.app import create_app
+    from backend.db import init_schema
+    init_schema()
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://example.invalid/v1")
+    app = create_app()
+    client = app.test_client()
+    r = client.post(
+        "/api/describe",
+        data={"file": (__import__("io").BytesIO(b""), "x.png", "image/png")},
+        content_type="multipart/form-data",
+    )
+    assert r.status_code == 400
+    assert r.get_json()["code"] == "invalid_input"
+
+
 def test_describe_endpoint_rejects_bad_mime(monkeypatch):
     from backend.app import create_app
     from backend.db import init_schema

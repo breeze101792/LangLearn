@@ -48,6 +48,28 @@ def test_data_dir_uses_env(monkeypatch, tmp_path):
     assert d.exists()
 
 
+def test_data_dir_falls_back_to_project_data(monkeypatch):
+    """With LANGLEARN_DATA_DIR unset, data_dir() resolves to the project's
+    data/ directory and creates it."""
+    from backend import config
+    monkeypatch.delenv("LANGLEARN_DATA_DIR", raising=False)
+    d = config.data_dir()
+    assert d == (config.PROJECT_ROOT / "data").resolve()
+    assert d.exists()
+
+
+def test_data_dir_expands_tilde(monkeypatch, tmp_path):
+    """A tilde in LANGLEARN_DATA_DIR is expanded to the home directory."""
+    from backend import config
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("LANGLEARN_DATA_DIR", "~/langlearn-test-data")
+    d = config.data_dir()
+    assert d == (home / "langlearn-test-data").resolve()
+    assert d.exists()
+
+
 def test_tts_cache_dir_creates_subdir(monkeypatch, tmp_path):
     from backend import config
     monkeypatch.setenv("LANGLEARN_DATA_DIR", str(tmp_path))
