@@ -31,7 +31,7 @@ const moduleState = {
   analyze: { lastResult: null, lastText: "" },
   refine: { lastResult: null, lastText: "" },
   translate: { lastResult: null, lastText: "" },
-  describe: { lastResult: null, lastImageHash: "" },
+  describe: { lastResult: null, lastImageHash: "", lastImageDataUrl: "", lastImageName: "" },
 };
 
 // Hash an uploaded image's bytes for the describe cache key. We don't
@@ -206,6 +206,77 @@ function resizeImageForUpload(file) {
   });
 }
 
+// Produce a small data URL preview of an image File so it can be
+// persisted in sessionStorage and restored when the user navigates back
+// to the Describe page. Capped at 480px on the long side and JPEG
+// quality 0.7 — small enough to fit comfortably in sessionStorage
+// alongside the rest of the page state. Falls back to the original
+// file's data URL if the canvas path fails. Returns "" on read error.
+const PREVIEW_MAX_EDGE = 480;
+const PREVIEW_JPEG_QUALITY = 0.7;
+
+async function makePreviewDataUrl(file) {
+  if (!file) return "";
+  const url = URL.createObjectURL(file);
+  try {
+    const img = await new Promise((resolve, reject) => {
+      const i = new Image();
+      i.onload = () => resolve(i);
+      i.onerror = () => reject(new Error("decode failed"));
+      i.src = url;
+    });
+    const srcW = img.naturalWidth || img.width || 0;
+    const srcH = img.naturalHeight || img.height || 0;
+    if (!srcW || !srcH) return await readAsDataUrl(file);
+    const longest = Math.max(srcW, srcH);
+    if (longest <= PREVIEW_MAX_EDGE) return await readAsDataUrl(file);
+    const scale = PREVIEW_MAX_EDGE / longest;
+    const dstW = Math.max(1, Math.round(srcW * scale));
+    const dstH = Math.max(1, Math.round(srcH * scale));
+    const canvas = document.createElement("canvas");
+    canvas.width = dstW;
+    canvas.height = dstH;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return await readAsDataUrl(file);
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, dstW, dstH);
+    ctx.drawImage(img, 0, 0, dstW, dstH);
+    return canvas.toDataURL("image/jpeg", PREVIEW_JPEG_QUALITY);
+  } catch (e) {
+    return await readAsDataUrl(file);
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+function readAsDataUrl(file) {
+  return new Promise((resolve) => {
+    try {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result || ""));
+      reader.onerror = () => resolve("");
+      reader.readAsDataURL(file);
+    } catch (e) {
+      resolve("");
+    }
+  });
+}
+
+// Convert a data URL back into a File so the restored preview can be
+// re-uploaded (e.g. Regenerate) without the user re-picking it.
+function dataUrlToFile(dataUrl, name) {
+  if (!dataUrl) return null;
+  const comma = dataUrl.indexOf(",");
+  if (comma === -1) return null;
+  const meta = dataUrl.slice(0, comma);
+  const mime = (meta.match(/data:([^;]+)/) || [])[1] || "image/jpeg";
+  const base64 = dataUrl.slice(comma + 1);
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return new File([bytes], name || "image.jpg", { type: mime });
+}
+
 // ---------------------------------------------------------------------------
 // Analyze tool
 // ---------------------------------------------------------------------------
@@ -354,6 +425,13 @@ function renderAnalyzePage(host) {
     host.querySelectorAll("button[data-save]").forEach((b) => {
       b.addEventListener("click", () => onSave(b));
     });
+    host.querySelectorAll("a.vocab-word").forEach((a) => {
+      a.addEventListener("click", (e) => {
+        e.preventDefault();
+        store.set({ pendingDictionaryWord: a.dataset.word });
+        window.location.hash = "#/dictionary";
+      });
+    });
     const regen = host.querySelector("button[data-action='regenerate']");
     if (regen) regen.addEventListener("click", onRegenerate);
   }
@@ -399,9 +477,10 @@ function renderAnalyzePage(host) {
   }
 
   function renderWord(w, i) {
+    const wordDisplay = (w.word || "").replace(/_/g, " ");
     return `
       <article class="list-item" data-kind="word" data-idx="${i}">
-        <div class="list-item__main"><strong>${escapeHtml(w.word || "")}</strong> <span class="word-card__pos">${escapeHtml(w.pos || "")}</span></div>
+        <div class="list-item__main"><strong><a href="#/dictionary" class="vocab-word" data-word="${escapeHtml(wordDisplay)}" title="Look up in Dictionary">${escapeHtml(wordDisplay)}</a></strong> <span class="word-card__pos">${escapeHtml(w.pos || "")}</span></div>
         <div class="list-item__meta list-item__meta--target" title="In the target language">
           <span class="list-item__meta-label">Meaning:</span>
           ${escapeHtml(w.glossary || "")}
@@ -890,6 +969,13 @@ function renderTranslatePage(host) {
     `;
     const regen = host.querySelector("button[data-action='regenerate']");
     if (regen) regen.addEventListener("click", onRegenerate);
+    host.querySelectorAll("a.vocab-word").forEach((a) => {
+      a.addEventListener("click", (e) => {
+        e.preventDefault();
+        store.set({ pendingDictionaryWord: a.dataset.word });
+        window.location.hash = "#/dictionary";
+      });
+    });
   }
 
   function renderSentence(s, i, targetName) {
@@ -928,7 +1014,7 @@ function renderTranslatePage(host) {
               <tbody>
                 ${breakdown.map((b) => `
                   <tr>
-                    <td><code>${escapeHtml(b.target || "")}</code></td>
+                    <td><code><a href="#/dictionary" class="vocab-word" data-word="${escapeHtml((b.target || "").replace(/_/g, " "))}" title="Look up in Dictionary">${escapeHtml(b.target || "")}</a></code></td>
                     <td>${escapeHtml(b.source || "")}</td>
                     <td class="field__hint">${b.note ? escapeHtml(b.note) : ""}</td>
                   </tr>
@@ -1005,9 +1091,28 @@ function renderDescribePage(host) {
       objectUrl = null;
     }
     selectedFile = null;
+    moduleState.describe.lastImageDataUrl = "";
+    moduleState.describe.lastImageName = "";
     previewWrap.hidden = true;
     previewImg.removeAttribute("src");
     btn.disabled = true;
+  }
+
+  // Restore a preview from a persisted data URL (saved on a previous
+  // visit). Reconstructs a File so Regenerate can re-upload without the
+  // user re-picking the photo. The data URL is the small preview, not
+  // the full original — good enough for display and re-upload (the
+  // server-side LLM downscales anyway).
+  function restorePreview(dataUrl, name) {
+    if (!dataUrl) return;
+    const file = dataUrlToFile(dataUrl, name || "image.jpg");
+    if (!file) return;
+    selectedFile = file;
+    moduleState.describe.lastImageDataUrl = dataUrl;
+    moduleState.describe.lastImageName = name || "image.jpg";
+    previewImg.src = dataUrl;
+    previewWrap.hidden = false;
+    btn.disabled = false;
   }
 
   fileInput.addEventListener("change", () => {
@@ -1037,6 +1142,15 @@ function renderDescribePage(host) {
     previewImg.src = objectUrl;
     previewWrap.hidden = false;
     btn.disabled = false;
+    // Persist a small preview so the photo survives navigation away
+    // and back. Fire-and-forget — the data URL lands in moduleState
+    // before saveState runs on the next navigation.
+    makePreviewDataUrl(file).then((dataUrl) => {
+      if (dataUrl) {
+        moduleState.describe.lastImageDataUrl = dataUrl;
+        moduleState.describe.lastImageName = file.name || "image.jpg";
+      }
+    });
   });
 
   clearBtn.addEventListener("click", () => {
@@ -1047,6 +1161,13 @@ function renderDescribePage(host) {
   btn.addEventListener("click", runDescribe);
 
   if (restored && typeof restored === "object") {
+    if (restored.imageDataUrl) {
+      restorePreview(restored.imageDataUrl, restored.imageName);
+      if (restored.imageDataUrl && !moduleState.describe.lastImageDataUrl) {
+        moduleState.describe.lastImageDataUrl = restored.imageDataUrl;
+        moduleState.describe.lastImageName = restored.imageName || "image.jpg";
+      }
+    }
     if (restored.lastResult && typeof restored.lastResult === "object") {
       lastResult = restored.lastResult;
       moduleState.describe.lastResult = lastResult;
@@ -1169,14 +1290,22 @@ function renderDescribePage(host) {
     host.querySelectorAll("button[data-save]").forEach((b) => {
       b.addEventListener("click", () => onSave(b));
     });
+    host.querySelectorAll("a.vocab-word").forEach((a) => {
+      a.addEventListener("click", (e) => {
+        e.preventDefault();
+        store.set({ pendingDictionaryWord: a.dataset.word });
+        window.location.hash = "#/dictionary";
+      });
+    });
     const regen = host.querySelector("button[data-action='regenerate']");
     if (regen) regen.addEventListener("click", onRegenerate);
   }
 
   function renderWord(w, i) {
+    const wordDisplay = (w.word || "").replace(/_/g, " ");
     return `
       <article class="list-item" data-kind="word" data-idx="${i}">
-        <div class="list-item__main"><strong>${escapeHtml(w.word || "")}</strong> <span class="word-card__pos">${escapeHtml(w.pos || "")}</span></div>
+        <div class="list-item__main"><strong><a href="#/dictionary" class="vocab-word" data-word="${escapeHtml(wordDisplay)}" title="Look up in Dictionary">${escapeHtml(wordDisplay)}</a></strong> <span class="word-card__pos">${escapeHtml(w.pos || "")}</span></div>
         <div class="list-item__meta list-item__meta--target" title="In the target language">
           <span class="list-item__meta-label">Meaning:</span>
           ${escapeHtml(w.glossary || "")}
@@ -1262,8 +1391,10 @@ export function saveState(prevHash) {
   const textarea = id ? document.getElementById(id) : null;
   const text = textarea ? textarea.value : "";
   const lastResult = moduleState[tool].lastResult;
-  if (!text && !lastResult) return null;
-  return { text, lastResult };
+  const imageDataUrl = tool === "describe" ? moduleState.describe.lastImageDataUrl : "";
+  const imageName = tool === "describe" ? moduleState.describe.lastImageName : "";
+  if (!text && !lastResult && !imageDataUrl) return null;
+  return { text, lastResult, imageDataUrl, imageName };
 }
 
 export function dispose() {
