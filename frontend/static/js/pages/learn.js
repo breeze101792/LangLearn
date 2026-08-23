@@ -573,8 +573,14 @@ function renderListPage(host, kind) {
 // doesn't lose the user's place. Only worth saving when the user
 // is mid-session — the pre-session and finished screens contribute
 // nothing.
-export function saveState() {
-  const hash = window.location.hash || "#/learn";
+//
+// `prevHash` is the hash about to be unmounted, passed by the router.
+// We prefer it over `window.location.hash` because the hash has
+// already changed to the new route by the time saveState runs, and
+// this page has multiple sub-hashes (#/learn, #/learn/new,
+// #/learn/reviewed) that must each save the right slice of state.
+export function saveState(prevHash) {
+  const hash = prevHash || window.location.hash || "#/learn";
   if (hash === "#/learn/new" || hash === "#/learn/reviewed") {
     const offset = moduleState.offset ? moduleState.offset() : 0;
     if (!offset) return null;

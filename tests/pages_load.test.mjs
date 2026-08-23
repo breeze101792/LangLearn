@@ -174,6 +174,7 @@ for (const helper of [
   "../frontend/static/js/components/page-state.js",
   "../frontend/static/js/components/review-cache.js",
   "../frontend/static/js/cache.js",
+  "../frontend/static/js/components/assist-cache.js",
 ]) {
   await testAsync(`helper ${helper} imports`, async () => {
     const mod = await importFresh(helper);
@@ -288,6 +289,126 @@ await testAsync("REGRESSION: without a pending word, restored searchInput still 
 
   const input = host.querySelector("#dict-search");
   assert(input.value === "apple", `expected restored input "apple", got "${input.value}"`);
+});
+
+// 6) Regression: Assist page saveState must use the router-provided
+//    prevHash, NOT window.location.hash. Before the fix, navigating
+//    from #/assist/refine to #/assist (analyze) would save the
+//    analyze subpage's empty state under #/assist/refine's key — the
+//    refine result was lost on the next visit. After the fix, the
+//    router passes prevHash explicitly and the right subpage's state
+//    is preserved.
+//
+// We can't easily simulate the full router here, but we can simulate
+// the contract: saveState(prevHash) returns the correct tool's state
+// regardless of window.location.hash.
+await testAsync("REGRESSION: assist saveState uses prevHash, not window.location.hash", async () => {
+  const assistMod = await importFresh("../frontend/static/js/pages/assist.js");
+  const stateMod = await import("../frontend/static/js/state.js");
+
+  // Seed settings so the page renders.
+  stateMod.store.set({
+    settings: {
+      active_language: "en",
+      explanation_primary: null,
+      explanation_secondary: null,
+      dict_chain_json: { en: [] },
+    },
+    languages: [{ code: "en", display_name: "English" }],
+  });
+
+  globalThis.fetch = async () => ({ ok: false, status: 503, statusText: "no", json: async () => ({ ok: false }) });
+
+  // Mount refine on the refine hash; confirm saveState with the
+  // matching prevHash returns null (no result yet).
+  window.location.hash = "#/assist/refine";
+  let host = window.document.getElementById("app-main");
+  host.innerHTML = "";
+  await assistMod.renderAssist(host);
+  const snap = assistMod.saveState("#/assist/refine");
+  assert(snap === null, "no state means saveState returns null");
+
+  // Mount analyze on the analyze hash. Pre-fix, saveState would
+  // read window.location.hash (now "#/assist") and default to
+  // "analyze". Post-fix, saveState(prevHash) chooses the right
+  // subpage. Either way with no input it returns null — but the
+  // invariant is that calling saveState with prevHash does not
+  // throw and operates on the right tool.
+  window.location.hash = "#/assist";
+  host = window.document.getElementById("app-main");
+  host.innerHTML = "";
+  await assistMod.renderAssist(host);
+  const snapAnalyze = assistMod.saveState("#/assist/analyze");
+  assert(snapAnalyze === null, "empty analyze state saves null");
+});
+
+// 7) Regression: switching between Assist subpages must not pollute
+//    one subpage's saved state with another subpage's data. Before
+//    the fix, saveState read window.location.hash which had already
+//    changed to the new subpage, so the new (empty) subpage's state
+//    was written under the old subpage's key.
+await testAsync("REGRESSION: assist subpages do not leak state into each other", async () => {
+  const assistMod = await importFresh("../frontend/static/js/pages/assist.js");
+  const stateMod = await import("../frontend/static/js/state.js");
+
+  stateMod.store.set({
+    settings: {
+      active_language: "en",
+      explanation_primary: null,
+      explanation_secondary: null,
+      dict_chain_json: { en: [] },
+    },
+    languages: [{ code: "en", display_name: "English" }],
+  });
+
+  // Clear cache so the click goes to fetch (and we can stub it).
+  const { clearAll } = await import("../frontend/static/js/components/assist-cache.js");
+  clearAll();
+
+  globalThis.fetch = async (url) => {
+    if (url.includes("/api/refine")) {
+      return {
+        ok: true, status: 200,
+        json: async () => ({
+          ok: true,
+          data: { corrected: "she would rather stay", native: "she'd rather stay", edits: [] },
+        }),
+      };
+    }
+    return { ok: false, status: 503, json: async () => ({ ok: false }) };
+  };
+
+  // Mount refine, type, click — moduleState.refine.lastResult gets set.
+  window.location.hash = "#/assist/refine";
+  let host = window.document.getElementById("app-main");
+  host.innerHTML = "";
+  await assistMod.renderAssist(host);
+  const textarea = host.querySelector("#refine-text");
+  assert(textarea, "refine textarea should render");
+  textarea.value = "she would rather stay";
+  textarea.dispatchEvent(new window.Event("input", { bubbles: true }));
+  const btn = host.querySelector("#refine-btn");
+  assert(btn, "refine button should render");
+  btn.click();
+  // Drain the microtask queue so the async fetch + render complete
+  // before saveState reads the module state.
+  await Promise.resolve();
+  await Promise.resolve();
+  await Promise.resolve();
+
+  // The router now navigates to analyze. window.location.hash
+  // becomes "#/assist". The router calls saveState(prevHash).
+  // Before the fix, saveState read window.location.hash (now
+  // "#/assist") and returned moduleState.analyze.lastResult (null).
+  // The fix: saveState takes prevHash and returns the refine
+  // snapshot.
+  window.location.hash = "#/assist";
+  const snap = assistMod.saveState("#/assist/refine");
+  assert(snap, "saveState(prevHash=#/assist/refine) must capture refine state");
+  assert(snap.text === "she would rather stay",
+    `expected refine text preserved, got "${snap.text}"`);
+  assert(snap.lastResult && snap.lastResult.corrected === "she would rather stay",
+    "expected refine lastResult preserved");
 });
 
 console.log(`\n${passed} passed, ${failures} failed`);

@@ -126,10 +126,15 @@ async function route() {
   //    without saveState (e.g. the dictionary result on first paint)
   //    simply contribute nothing. Settings is excluded from
   //    save/restore entirely — the user wants a fresh view there.
+  //
+  //    We pass prevHash so multi-subpage routes (Assist, Learn) can
+  //    identify which subpage's state they're saving. window.location
+  //    is already on the new hash by this point, so falling back to
+  //    it would save the wrong subpage's state under the old hash.
   if (prevModule && prevHash && prevHash !== nextHash) {
     if (typeof prevModule.saveState === "function") {
       try {
-        const snap = prevModule.saveState();
+        const snap = prevModule.saveState(prevHash);
         savePageState(prevHash, snap);
       } catch (e) {
         console.warn("saveState failed for", prevHash, e);

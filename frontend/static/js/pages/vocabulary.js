@@ -318,7 +318,11 @@ export function renderVocabulary(host) {
 // vocabulary view. Reset on each mount.
 const moduleState = { activeBox: null, offset: null };
 
-export function saveState() {
+export function saveState(_prevHash) {
+  // The router passes the outgoing hash for pages with multiple
+  // subpages; Vocabulary only has one hash, so we ignore it. The
+  // signature is kept consistent across pages so the router doesn't
+  // need to know who uses it.
   if (!moduleState.activeBox) return null;
   const activeBox = moduleState.activeBox();
   const offset = moduleState.offset ? moduleState.offset() : 0;

@@ -15,14 +15,66 @@ import { api, uploadForm } from "../api.js";
 import { store } from "../state.js";
 import { toast } from "../components/toast.js";
 import { consumeRestoredState } from "../components/page-state.js";
+import {
+  getCached,
+  setCached,
+  clearCached,
+} from "../components/assist-cache.js";
 
 // Per-tool live state, read by saveState() on navigation away.
+//
+// `lastText` is the input that produced `lastResult` so the Regenerate
+// button knows which (tool, lang, text) cache entry to drop without
+// having to scrape the DOM. Without it, the Regenerate handler would
+// race the user editing the textarea.
 const moduleState = {
-  analyze: { lastResult: null },
-  refine: { lastResult: null },
-  translate: { lastResult: null },
-  describe: { lastResult: null },
+  analyze: { lastResult: null, lastText: "" },
+  refine: { lastResult: null, lastText: "" },
+  translate: { lastResult: null, lastText: "" },
+  describe: { lastResult: null, lastImageHash: "" },
 };
+
+// Hash an uploaded image's bytes for the describe cache key. We don't
+// hash the full file (multi-MB photos would be slow) — the first 64 KB
+// plus the file size is good enough to distinguish two different photos
+// and stable across identical re-uploads. Uses SubtleCrypto when
+// available; falls back to FNV-1a so the test harness doesn't need it.
+async function hashImageForCache(file) {
+  if (!file) return "";
+  const bytes = await readFirstBytes(file, 64 * 1024);
+  const g = typeof globalThis !== "undefined" ? globalThis : null;
+  if (g && g.crypto && g.crypto.subtle && typeof g.crypto.subtle.digest === "function") {
+    try {
+      const buf = await g.crypto.subtle.digest("SHA-1", bytes);
+      const hex = Array.from(new Uint8Array(buf))
+        .map((b) => b.toString(16).padStart(2, "0"))
+        .join("");
+      return `${hex}:${file.size}`;
+    } catch (e) { /* fall through */ }
+  }
+  // FNV-1a fallback. Not cryptographic, but stable across runs.
+  let hash = 0xcbf29ce484222325n;
+  const prime = 0x100000001b3n;
+  for (let i = 0; i < bytes.length; i++) {
+    hash ^= BigInt(bytes[i]);
+    hash = (hash * prime) & 0xffffffffffffffffn;
+  }
+  return `${hash.toString(16).padStart(16, "0")}:${file.size}`;
+}
+
+function readFirstBytes(file, n) {
+  return new Promise((resolve, reject) => {
+    try {
+      const slice = file.slice(0, Math.min(n, file.size));
+      const reader = new FileReader();
+      reader.onload = () => resolve(new Uint8Array(reader.result));
+      reader.onerror = () => reject(reader.error || new Error("read failed"));
+      reader.readAsArrayBuffer(slice);
+    } catch (e) {
+      reject(e);
+    }
+  });
+}
 
 export function renderAssist(host) {
   const hash = window.location.hash || "#/assist";
@@ -221,6 +273,18 @@ function renderAnalyzePage(host) {
       textarea.focus();
       return;
     }
+    // Cache hit: same (tool, lang, text) was already analyzed. Render
+    // the stored result instantly instead of re-hitting the LLM.
+    // The Regenerate button on the result header is the escape hatch
+    // when the user wants a fresh take on the same text.
+    const cached = getCached("analyze", lang, text);
+    if (cached && typeof cached === "object") {
+      lastResult = cached;
+      moduleState.analyze.lastResult = lastResult;
+      moduleState.analyze.lastText = text;
+      renderResult(result, lastResult);
+      return;
+    }
     btn.disabled = true;
     const original = btn.textContent;
     btn.textContent = "Analyzing…";
@@ -244,11 +308,22 @@ function renderAnalyzePage(host) {
       }
       lastResult = res.data || { structures: [], phrases: [], words: [] };
       moduleState.analyze.lastResult = lastResult;
+      moduleState.analyze.lastText = text;
+      setCached("analyze", lang, text, lastResult);
       renderResult(result, lastResult);
     } finally {
       btn.disabled = false;
       btn.textContent = original;
     }
+  }
+
+  function onRegenerate() {
+    const text = (moduleState.analyze.lastText || "").trim();
+    if (!text) return;
+    // Drop the cached entry, then re-run the same analyze. The new
+    // response overwrites the cache key for this (tool, lang, text).
+    clearCached("analyze", lang, text);
+    runAnalyze();
   }
 
   function renderResult(host, data) {
@@ -268,6 +343,9 @@ function renderAnalyzePage(host) {
     }
     host.innerHTML = `
       <div class="list">
+        <div class="row" style="justify-content: flex-end; margin-bottom: var(--sp-2)">
+          <button type="button" class="btn btn--sm btn--ghost" data-action="regenerate" title="Re-run the analysis with the same text">↻ Regenerate</button>
+        </div>
         ${structures.length ? section("Sentence structures", structures.map((s, i) => renderStructure(s, i)).join("")) : ""}
         ${phrases.length ? section("Phrases & expressions", phrases.map((p, i) => renderPhrase(p, i)).join("")) : ""}
         ${words.length ? section("Difficult words", words.map((w, i) => renderWord(w, i)).join("")) : ""}
@@ -276,6 +354,8 @@ function renderAnalyzePage(host) {
     host.querySelectorAll("button[data-save]").forEach((b) => {
       b.addEventListener("click", () => onSave(b));
     });
+    const regen = host.querySelector("button[data-action='regenerate']");
+    if (regen) regen.addEventListener("click", onRegenerate);
   }
 
   function renderStructure(s, i) {
@@ -481,6 +561,17 @@ function renderRefinePage(host) {
       textarea.focus();
       return;
     }
+    // Cache hit: identical (tool, lang, text) was refined before.
+    // Re-render the cached response so re-clicking Refine on the same
+    // text is instant. Regenerate forces a fresh LLM call.
+    const cached = getCached("refine", lang, text);
+    if (cached && typeof cached === "object") {
+      lastResult = cached;
+      moduleState.refine.lastResult = lastResult;
+      moduleState.refine.lastText = text;
+      renderResult(result, lastResult);
+      return;
+    }
     btn.disabled = true;
     const original = btn.textContent;
     btn.textContent = "Refining…";
@@ -504,6 +595,8 @@ function renderRefinePage(host) {
       }
       lastResult = res.data || null;
       moduleState.refine.lastResult = lastResult;
+      moduleState.refine.lastText = text;
+      setCached("refine", lang, text, lastResult);
       renderResult(result, lastResult);
     } finally {
       btn.disabled = false;
@@ -525,6 +618,9 @@ function renderRefinePage(host) {
 
     host.innerHTML = `
       <div class="list">
+        <div class="row" style="justify-content: flex-end; margin-bottom: var(--sp-2)">
+          <button type="button" class="btn btn--sm btn--ghost" data-action="regenerate" title="Re-run the refinement with the same text">↻ Regenerate</button>
+        </div>
         <section class="analyze-section">
           <h2 class="analyze-section__title">Corrected</h2>
           <div class="card refine-card">
@@ -575,6 +671,15 @@ function renderRefinePage(host) {
         ` : ""}
       </div>
     `;
+    const regen = host.querySelector("button[data-action='regenerate']");
+    if (regen) regen.addEventListener("click", onRegenerate);
+  }
+
+  function onRegenerate() {
+    const text = (moduleState.refine.lastText || "").trim();
+    if (!text) return;
+    clearCached("refine", lang, text);
+    runRefine();
   }
 
   function renderEdit(e, i) {
@@ -697,6 +802,18 @@ function renderTranslatePage(host) {
       textarea.focus();
       return;
     }
+    // Translate is keyed by (tool, targetLang, text) since the output
+    // is determined by the source text *and* the target language. Two
+    // requests for the same source text into different target langs
+    // must produce different cache entries.
+    const cached = getCached("translate", targetLang, text);
+    if (cached && typeof cached === "object") {
+      lastResult = cached;
+      moduleState.translate.lastResult = lastResult;
+      moduleState.translate.lastText = text;
+      renderResult(result, lastResult, targetName);
+      return;
+    }
     btn.disabled = true;
     const original = btn.textContent;
     btn.textContent = "Translating…";
@@ -720,11 +837,20 @@ function renderTranslatePage(host) {
       }
       lastResult = res.data || null;
       moduleState.translate.lastResult = lastResult;
+      moduleState.translate.lastText = text;
+      setCached("translate", targetLang, text, lastResult);
       renderResult(result, lastResult, targetName);
     } finally {
       btn.disabled = false;
       btn.textContent = original;
     }
+  }
+
+  function onRegenerate() {
+    const text = (moduleState.translate.lastText || "").trim();
+    if (!text) return;
+    clearCached("translate", targetLang, text);
+    runTranslate();
   }
 
   function renderResult(host, data, targetName) {
@@ -746,6 +872,9 @@ function renderTranslatePage(host) {
 
     host.innerHTML = `
       <div class="list">
+        <div class="row" style="justify-content: flex-end; margin-bottom: var(--sp-2)">
+          <button type="button" class="btn btn--sm btn--ghost" data-action="regenerate" title="Re-run the translation with the same text">↻ Regenerate</button>
+        </div>
         ${sentences.map((s, i) => renderSentence(s, i, targetName)).join("")}
         ${notes ? `
           <section class="analyze-section">
@@ -759,6 +888,8 @@ function renderTranslatePage(host) {
         ` : ""}
       </div>
     `;
+    const regen = host.querySelector("button[data-action='regenerate']");
+    if (regen) regen.addEventListener("click", onRegenerate);
   }
 
   function renderSentence(s, i, targetName) {
@@ -929,6 +1060,18 @@ function renderDescribePage(host) {
       fileInput.focus();
       return;
     }
+    // Hash the file bytes up-front so we can probe the cache before the
+    // upload. Two uploads of the same image produce the same hash and
+    // share a cache entry; different photos get different entries.
+    const imageHash = await hashImageForCache(selectedFile);
+    const cached = getCached("describe", lang, imageHash);
+    if (cached && typeof cached === "object") {
+      lastResult = cached;
+      moduleState.describe.lastResult = lastResult;
+      moduleState.describe.lastImageHash = imageHash;
+      renderResult(result, lastResult);
+      return;
+    }
     btn.disabled = true;
     const original = btn.textContent;
     btn.textContent = "Describing…";
@@ -965,11 +1108,20 @@ function renderDescribePage(host) {
       }
       lastResult = res.data || { description: "", words: [] };
       moduleState.describe.lastResult = lastResult;
+      moduleState.describe.lastImageHash = imageHash;
+      setCached("describe", lang, imageHash, lastResult);
       renderResult(result, lastResult);
     } finally {
       btn.disabled = false;
       btn.textContent = original;
     }
+  }
+
+  function onRegenerate() {
+    const imageHash = (moduleState.describe.lastImageHash || "").trim();
+    if (!imageHash) return;
+    clearCached("describe", lang, imageHash);
+    runDescribe();
   }
 
   function renderResult(host, data) {
@@ -991,6 +1143,9 @@ function renderDescribePage(host) {
 
     host.innerHTML = `
       <div class="list">
+        <div class="row" style="justify-content: flex-end; margin-bottom: var(--sp-2)">
+          <button type="button" class="btn btn--sm btn--ghost" data-action="regenerate" title="Re-describe the same photo">↻ Regenerate</button>
+        </div>
         ${description ? `
           <section class="analyze-section">
             <h2 class="analyze-section__title">Description</h2>
@@ -1014,6 +1169,8 @@ function renderDescribePage(host) {
     host.querySelectorAll("button[data-save]").forEach((b) => {
       b.addEventListener("click", () => onSave(b));
     });
+    const regen = host.querySelector("button[data-action='regenerate']");
+    if (regen) regen.addEventListener("click", onRegenerate);
   }
 
   function renderWord(w, i) {
@@ -1082,8 +1239,16 @@ function renderDescribePage(host) {
 // Persist the active tool's textarea and last result so a quick detour to
 // another page doesn't lose work. The router calls this on every hash
 // change; without saving, navigating back would re-render a blank page.
-export function saveState() {
-  const hash = window.location.hash || "#/assist";
+//
+// `prevHash` is the hash that is *about to be unmounted*. The router
+// hands it to us so we know which subpage's state to save. Without it
+// we'd fall back to `window.location.hash`, but by the time saveState
+// runs that already points at the *new* route — the same bug existed
+// before: navigating from #/assist/refine to #/assist would write the
+// analyze subpage's (empty) state under #/assist/refine's key and the
+// refine result was lost. The router now passes prevHash explicitly.
+export function saveState(prevHash) {
+  const hash = prevHash || window.location.hash || "#/assist";
   const tool = hash === "#/assist/refine" ? "refine"
     : hash === "#/assist/translate" ? "translate"
     : hash === "#/assist/describe" ? "describe"
