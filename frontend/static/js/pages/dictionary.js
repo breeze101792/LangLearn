@@ -390,6 +390,13 @@ async function pasteAndLookup(lang) {
 
 async function doLookup(word, lang, providerOverride) {
   const resultHost = document.getElementById("dict-result");
+  const suggestEl = document.getElementById("dict-suggest");
+  // Cancel any pending debounce and invalidate any in-flight suggest
+  // request so its late response can't reopen the dropdown over the
+  // result we're about to render. Hide the list right now regardless.
+  clearTimeout(suggestTimer);
+  suggestToken++;
+  if (suggestEl) hideSuggest(suggestEl);
   const myToken = ++lookupToken;
   if (!word) {
     resultHost.innerHTML = `<div class="empty-state"><div class="empty-state__msg">Type a word to look up.</div></div>`;
