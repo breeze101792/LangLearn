@@ -28,6 +28,15 @@ def clean_state(monkeypatch, tmp_path):
     monkeypatch.setenv("OPENAI_API_KEY", "")
     monkeypatch.setenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
     monkeypatch.setenv("OPENAI_MODEL", "gpt-test")
+    # Disable the secondary LLM provider by default. Individual tests opt
+    # back in via their own fixture to exercise the fallback chain.
+    for k in ("SECONDARY_OPENAI_API_KEY", "SECONDARY_OPENAI_BASE_URL",
+              "SECONDARY_OPENAI_MODEL"):
+        monkeypatch.delenv(k, raising=False)
+    from backend import config as _cfg
+    monkeypatch.setattr(_cfg, "SECONDARY_OPENAI_API_KEY", "")
+    monkeypatch.setattr(_cfg, "SECONDARY_OPENAI_BASE_URL", "")
+    monkeypatch.setattr(_cfg, "SECONDARY_OPENAI_MODEL", "")
     # config.load_dotenv() pulls in a developer .env; tests must not inherit
     # LANGLEARN_PASSWORD from it. Auth-gated tests re-enable it via their own
     # fixture.

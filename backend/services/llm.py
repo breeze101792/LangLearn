@@ -360,10 +360,31 @@ FILL_PHRASE_SCHEMA: dict = {
 
 
 # ---- Provider plumbing --------------------------------------------------
+#
+# Two OpenAI-compatible clients — the primary (the historical provider,
+# configured by OPENAI_API_KEY / OPENAI_BASE_URL / OPENAI_MODEL) and an
+# optional secondary (SECONDARY_OPENAI_*). Wire format is identical; only
+# the env-var names differ. ``complete_json`` and ``_describe_complete_json``
+# walk the chain: the primary gets its full retry budget, and on any
+# ``LLMError`` the secondary gets the same budget with a fresh attempt
+# counter. When the secondary is unconfigured, behavior matches the
+# historical single-provider path exactly.
 
 
-def _client():
-    return OpenAICompatClient()
+def _clients() -> list["_BaseClient"]:
+    """Return the ordered list of LLM clients to try for a single request.
+
+    Always starts with the primary. The secondary is appended only when
+    it has the minimum info to attempt a request (at least a base URL;
+    the per-request env-var read inside the secondary client decides
+    whether a missing API key is fatal). The list is built on every
+    call so test fixtures and runtime env overrides take effect without
+    re-importing the module.
+    """
+    clients: list[_BaseClient] = [PrimaryOpenAICompatClient()]
+    if config.secondary_llm_configured():
+        clients.append(SecondaryOpenAICompatClient())
+    return clients
 
 
 def complete_json(
@@ -391,6 +412,13 @@ def complete_json(
     ``config.LLM_TIMEOUT_SECONDS``). Larger prompts that ask for many
     fields (e.g. Analyze) can need a bigger budget than the default.
 
+    Fallback: when a secondary provider is configured, the primary's
+    full retry budget runs first; if it still fails (any reason:
+    network, timeout, HTTP error, schema-validation exhaustion, missing
+    API key), the secondary gets the same budget with a fresh attempt
+    counter and no carry-over of the primary's `last_error`. The
+    secondary's exception wins if it also fails.
+
     On failure, raises ``LLMSchemaError`` whose message includes the
     final validation error and a truncated copy of the last response
     the model produced. This makes it possible to diagnose strict-
@@ -398,7 +426,49 @@ def complete_json(
     DEBUG logging.
     """
     validator = Draft202012Validator(schema)
-    client = _client()
+    last_exc: Exception | None = None
+    for client in _clients():
+        try:
+            return _complete_json_with_client(
+                client=client,
+                validator=validator,
+                schema=schema,
+                schema_name=schema_name,
+                system=system,
+                user=user,
+                temperature=temperature,
+                max_retries=max_retries,
+                normalize=normalize,
+                timeout=timeout,
+            )
+        except LLMError as e:
+            last_exc = e
+            log.warning(
+                "LLM client %s failed on schema '%s': %s; "
+                "falling back to next provider",
+                type(client).__name__, schema_name, e,
+            )
+            continue
+    assert last_exc is not None
+    raise last_exc
+
+
+def _complete_json_with_client(
+    *,
+    client: "_BaseClient",
+    validator: Draft202012Validator,
+    schema: dict,
+    schema_name: str,
+    system: str,
+    user: str,
+    temperature: float,
+    max_retries: int,
+    normalize: Callable[[dict], dict] | None,
+    timeout: int | None,
+) -> dict:
+    """Run the retry loop against one client. Extracted so the public
+    :func:`complete_json` can wrap it in a primary/secondary fallback
+    chain without duplicating the per-attempt logic."""
     last_error: str | None = None
     last_raw: str | None = None
 
@@ -435,8 +505,6 @@ def complete_json(
             log.warning("LLM schema validation error (attempt %d): %s",
                         attempt + 1, e.message)
 
-    # Build a helpful error: which schema was being filled, what the
-    # last validation error was, and a sample of the last raw response.
     sample = (last_raw or "")[:400]
     raise LLMSchemaError(
         f"LLM did not produce valid JSON for schema '{schema_name}' "
@@ -455,7 +523,22 @@ class _BaseClient:
         raise NotImplementedError
 
 
-class OpenAICompatClient(_BaseClient):
+class _OpenAICompatClientBase(_BaseClient):
+    """Shared wire format for an OpenAI-compatible Chat Completions call.
+
+    Subclasses pick which env-var names to read (``OPENAI_*`` for primary,
+    ``SECONDARY_OPENAI_*`` for fallback). The URL, model, and key are
+    read on every request so test fixtures and live overrides take effect
+    without re-importing the module.
+    """
+
+    api_key_env: str = ""
+    base_url_env: str = ""
+    model_env: str = ""
+    api_key_default: str = ""
+    base_url_default: str = ""
+    model_default: str = ""
+
     def chat(self, *, system, user, schema, schema_name, temperature,
              timeout: int | None = None) -> str:
         return self.chat_messages(
@@ -470,14 +553,21 @@ class OpenAICompatClient(_BaseClient):
     def chat_messages(self, *, messages, schema, schema_name, temperature,
                       timeout: int | None = None) -> str:
         import os
-        api_key = os.environ.get("OPENAI_API_KEY", "") or config.OPENAI_API_KEY
-        url = (os.environ.get("OPENAI_BASE_URL") or config.OPENAI_BASE_URL).rstrip("/") + "/chat/completions"
-        model = os.environ.get("OPENAI_MODEL") or config.OPENAI_MODEL
+        api_key = (
+            os.environ.get(self.api_key_env, "")
+            or getattr(config, self.api_key_default)
+        )
+        url = (
+            os.environ.get(self.base_url_env) or getattr(config, self.base_url_default)
+        ).rstrip("/") + "/chat/completions"
+        model = (
+            os.environ.get(self.model_env) or getattr(config, self.model_default)
+        )
         # Only OpenAI's hosted API hard-requires a key; self-hosted /
         # OpenAI-compatible endpoints (e.g. Ollama) often don't.
         requires_key = "api.openai.com" in url
         if requires_key and not api_key:
-            raise LLMError("OPENAI_API_KEY is not set")
+            raise LLMError(f"{self.api_key_env} is not set")
         payload = {
             "model": model,
             "messages": messages,
@@ -498,6 +588,28 @@ class OpenAICompatClient(_BaseClient):
 
     def supports_strict_schema(self) -> bool:
         return True
+
+
+class PrimaryOpenAICompatClient(_OpenAICompatClientBase):
+    api_key_env = "OPENAI_API_KEY"
+    base_url_env = "OPENAI_BASE_URL"
+    model_env = "OPENAI_MODEL"
+    api_key_default = "OPENAI_API_KEY"
+    base_url_default = "OPENAI_BASE_URL"
+    model_default = "OPENAI_MODEL"
+
+
+class SecondaryOpenAICompatClient(_OpenAICompatClientBase):
+    api_key_env = "SECONDARY_OPENAI_API_KEY"
+    base_url_env = "SECONDARY_OPENAI_BASE_URL"
+    model_env = "SECONDARY_OPENAI_MODEL"
+    api_key_default = "SECONDARY_OPENAI_API_KEY"
+    base_url_default = "SECONDARY_OPENAI_BASE_URL"
+    model_default = "SECONDARY_OPENAI_MODEL"
+
+
+# Back-compat alias. External code and tests may still import this name.
+OpenAICompatClient = PrimaryOpenAICompatClient
 
 
 def _strip_markdown_fence(text: str) -> str:
@@ -2625,9 +2737,43 @@ def _describe_complete_json(
     array (so the describe path can attach an image content part) and
     returns the raw JSON string the model produced. Validates against
     ``schema`` with the same retry-on-schema-error policy as the text
-    path."""
+    path. Walks the primary/secondary client chain on failure, exactly
+    like :func:`complete_json`."""
     validator = Draft202012Validator(schema)
-    client = _client()
+    last_exc: Exception | None = None
+    for client in _clients():
+        try:
+            return _describe_complete_json_with_client(
+                client=client,
+                validator=validator,
+                schema=schema,
+                schema_name=schema_name,
+                messages=messages,
+                temperature=temperature,
+                max_retries=max_retries,
+                normalize=normalize,
+                timeout=timeout,
+            )
+        except LLMError as e:
+            last_exc = e
+            log.warning(
+                "LLM client %s failed on schema '%s': %s; "
+                "falling back to next provider",
+                type(client).__name__, schema_name, e,
+            )
+            continue
+    assert last_exc is not None
+    raise last_exc
+
+
+def _describe_complete_json_with_client(
+    *, client: "_BaseClient",
+    validator: Draft202012Validator,
+    schema: dict, schema_name: str, messages: list[dict],
+    temperature: float, max_retries: int,
+    normalize: Callable[[dict], dict] | None,
+    timeout: int | None,
+) -> str:
     last_error: str | None = None
     last_raw: str | None = None
 

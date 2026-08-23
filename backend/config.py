@@ -103,6 +103,31 @@ OPENAI_API_KEY: str = os.environ.get("OPENAI_API_KEY", "")
 OPENAI_BASE_URL: str = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1")
 OPENAI_MODEL: str = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
 
+# Secondary LLM provider. Same OpenAI-compatible protocol as the primary,
+# but a different endpoint / key / model. Used by the LLM service as a
+# fallback when the primary fails for any reason (network error, timeout,
+# HTTP 4xx/5xx, schema-validation exhaustion, missing API key, ...). The
+# fallback is automatic; the rest of the app doesn't need to know which
+# provider answered. All three vars default to empty so the fallback is
+# off out of the box — a developer who never touched the secondary
+# section keeps the historical single-provider behavior.
+SECONDARY_OPENAI_API_KEY: str = os.environ.get("SECONDARY_OPENAI_API_KEY", "")
+SECONDARY_OPENAI_BASE_URL: str = os.environ.get("SECONDARY_OPENAI_BASE_URL", "")
+SECONDARY_OPENAI_MODEL: str = os.environ.get("SECONDARY_OPENAI_MODEL", "")
+
+
+def secondary_llm_configured() -> bool:
+    """True when the secondary OpenAI-compatible provider has been
+    explicitly opted into by setting ``SECONDARY_OPENAI_BASE_URL``. We
+    gate on the base URL (not the key) because non-OpenAI endpoints
+    such as a local Ollama proxy can work without auth — but the
+    presence of an explicit URL means the developer meant to enable
+    the fallback. Read on every call so tests / live overrides take
+    effect without re-importing."""
+    base = os.environ.get("SECONDARY_OPENAI_BASE_URL") or SECONDARY_OPENAI_BASE_URL
+    return bool(base)
+
+
 LLM_TIMEOUT_SECONDS: int = int(os.environ.get("LLM_TIMEOUT_SECONDS", "180"))
 
 

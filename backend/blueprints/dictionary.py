@@ -168,23 +168,31 @@ def providers():
 
 
 def _llm_status() -> tuple[bool, str]:
-    """True when the OpenAI-compatible provider has the credentials it needs.
+    """True when at least one OpenAI-compatible provider has the credentials
+    it needs. The primary counts if it has any URL + (if it's OpenAI's
+    hosted API) a key; otherwise it's good to go without a key. The
+    secondary counts whenever its base URL is set — non-OpenAI endpoints
+    like a local Ollama proxy work without auth.
 
-    Mirrors the env-var checks inside `OpenAICompatClient` so the UI can warn
-    the user before they wait on a lookup that will fail. Reads env vars per
-    call so test fixtures that mutate env after import time still see the
-    latest values.
+    Mirrors the env-var checks inside the LLM clients so the UI can warn
+    the user before they wait on a lookup that will fail. Reads env vars
+    per call so test fixtures that mutate env after import time still see
+    the latest values.
     """
     import os
     kind = "openai-compat"
-    # Any URL + a non-empty API key is enough for most providers. Allow a
-    # missing key when the base URL is non-OpenAI (some local proxies don't
-    # require auth).
+    # Primary: any URL is enough; key only required for api.openai.com.
     base = os.environ.get("OPENAI_BASE_URL") or config.OPENAI_BASE_URL
     if base and "api.openai.com" not in base:
         return True, kind
     key = os.environ.get("OPENAI_API_KEY") or config.OPENAI_API_KEY
-    return bool(key), kind
+    if key:
+        return True, kind
+    # Secondary: configured (base URL set) is enough on its own — the
+    # fallback handles the rest. Mirrors ``config.secondary_llm_configured()``.
+    if config.secondary_llm_configured():
+        return True, kind
+    return False, kind
 
 
 @bp.get("/suggest")
