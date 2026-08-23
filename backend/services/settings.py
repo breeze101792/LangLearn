@@ -20,6 +20,7 @@ DEFAULTS: dict[str, Any] = {
     "explanation_primary": "en",
     "explanation_secondary": None,
     "dict_chain_json": {},
+    "language_levels_json": {},
     "theme": "auto",
     "show_readings": 1,
     "tts_provider": "google",
@@ -64,8 +65,9 @@ def create_default_settings(user_id: int = config.DEFAULT_USER_ID) -> None:
             "INSERT OR IGNORE INTO settings ("
             "  user_id, active_language, auto_add_vocab, page_size,"
             "  review_session_size, explanation_primary, explanation_secondary,"
-            "  dict_chain_json, theme, show_readings, tts_provider"
-            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "  dict_chain_json, language_levels_json, theme, show_readings,"
+            "  tts_provider"
+            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 user_id,
                 DEFAULTS["active_language"],
@@ -75,6 +77,7 @@ def create_default_settings(user_id: int = config.DEFAULT_USER_ID) -> None:
                 DEFAULTS["explanation_primary"],
                 DEFAULTS["explanation_secondary"],
                 chain_json,
+                json.dumps(DEFAULTS["language_levels_json"], ensure_ascii=False),
                 DEFAULTS["theme"],
                 DEFAULTS["show_readings"],
                 DEFAULTS["tts_provider"],
@@ -100,7 +103,7 @@ def update_settings(updates: dict, user_id: int = config.DEFAULT_USER_ID) -> dic
     params: list[Any] = []
     for k in fields:
         v = cleaned[k]
-        if k == "dict_chain_json":
+        if k in ("dict_chain_json", "language_levels_json"):
             v = json.dumps(v, ensure_ascii=False)
         sets_parts.append(f"{k}=?")
         params.append(v)
@@ -160,6 +163,10 @@ def _coerce(key: str, value: Any) -> Any:
         if not isinstance(value, dict):
             raise ValueError("dict_chain_json must be an object")
         return _clean_dict_chain(value)
+    if key == "language_levels_json":
+        if not isinstance(value, dict):
+            raise ValueError("language_levels_json must be an object")
+        return _clean_language_levels(value)
     if key == "tts_provider":
         if not isinstance(value, str):
             raise ValueError("tts_provider must be a string")
@@ -233,6 +240,56 @@ def _clean_dict_chain(value: Any) -> dict[str, list[dict]]:
     return out
 
 
+def _clean_language_levels(value: Any) -> dict[str, str]:
+    """Validate and normalize a language_levels_json payload.
+
+    Shape: { lang_code: "B1" } where the level is one of
+    ``config.CEFR_LEVELS``. Unknown languages, unknown levels, and
+    non-string values are rejected so we never persist garbage the
+    LLM prompt builder would echo verbatim. A null/empty level means
+    "unset" and is dropped from the map (the getter returns None for
+    any language not in the map).
+    """
+    if not isinstance(value, dict):
+        raise ValueError("language_levels_json must be an object")
+    valid_levels = set(config.CEFR_LEVELS)
+    out: dict[str, str] = {}
+    for lang, level in value.items():
+        if not is_valid_lang(lang):
+            raise ValueError(f"language_levels_json: unknown language '{lang}'")
+        if level is None or level == "":
+            continue
+        if not isinstance(level, str):
+            raise ValueError(
+                f"language_levels_json[{lang}] must be a string or null"
+            )
+        normalized = level.strip().upper()
+        if normalized not in valid_levels:
+            raise ValueError(
+                f"language_levels_json[{lang}]: unknown level '{level}' "
+                f"(expected one of {', '.join(config.CEFR_LEVELS)} or null)"
+            )
+        out[lang] = normalized
+    return out
+
+
+def get_language_level(lang: str, user_id: int = config.DEFAULT_USER_ID) -> str | None:
+    """Return the user's saved CEFR level for ``lang``, or None if unset.
+
+    The LLM prompt builders use this to decide whether to emit a level
+    directive. None means "don't tell the model anything about level"
+    — the legacy pre-010 behavior.
+    """
+    settings = get_settings(user_id)
+    levels = settings.get("language_levels_json")
+    if not isinstance(levels, dict):
+        return None
+    level = levels.get(lang)
+    if not isinstance(level, str):
+        return None
+    return level
+
+
 def _row_to_dict(row) -> dict:
     chain_raw = row["dict_chain_json"]
     chain = json.loads(chain_raw) if chain_raw else {}
@@ -259,4 +316,12 @@ def _row_to_dict(row) -> dict:
         out["review_session_size"] = row["review_session_size"]
     except (IndexError, KeyError):
         out["review_session_size"] = DEFAULTS["review_session_size"]
+    # `language_levels_json` is added in migration 010; older DB rows may
+    # not have the column. Tolerate that with a fallback to the default
+    # (empty map — no level set for any language).
+    try:
+        levels_raw = row["language_levels_json"]
+        out["language_levels_json"] = json.loads(levels_raw) if levels_raw else {}
+    except (IndexError, KeyError):
+        out["language_levels_json"] = dict(DEFAULTS["language_levels_json"])
     return out

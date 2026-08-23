@@ -15,7 +15,8 @@ log = logging.getLogger(__name__)
 
 def lookup(word: str, lang: str, *,
            explanation_primary: str | None = None,
-           explanation_secondary: str | None = None) -> WordEntry:
+           explanation_secondary: str | None = None,
+           level: str | None = None, **_ignored) -> WordEntry:
     # Re-raise on failure: the chain executor catches our exception and
     # records it in ChainResult.errors so the UI can tell the user "AI is
     # unreachable" instead of silently presenting an empty result.
@@ -24,6 +25,7 @@ def lookup(word: str, lang: str, *,
         word=word,
         explanation_primary=explanation_primary,
         explanation_secondary=explanation_secondary,
+        level=level,
     )
     senses: list[Sense] = []
     for raw in data.get("senses", []):

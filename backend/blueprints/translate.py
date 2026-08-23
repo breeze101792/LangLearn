@@ -53,10 +53,11 @@ def translate_text():
 
     primary = user_settings.get("explanation_primary")
     secondary = user_settings.get("explanation_secondary")
+    level = settings_svc.get_language_level(target_lang, config.DEFAULT_USER_ID)
     try:
         result = llm_svc.translate_text_via_llm(
             target_lang=target_lang, text=text,
-            primary=primary, secondary=secondary,
+            primary=primary, secondary=secondary, level=level,
         )
     except llm_svc.LLMError as e:
         return jsonify(err(str(e), code="llm_error")), 502

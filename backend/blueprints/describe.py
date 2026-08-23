@@ -88,11 +88,12 @@ def describe_image():
 
     primary = user_settings.get("explanation_primary")
     secondary = user_settings.get("explanation_secondary")
+    level = settings_svc.get_language_level(lang, config.DEFAULT_USER_ID)
     assert isinstance(image_bytes, bytes)
     try:
         result = llm_svc.describe_image_via_llm(
             target_lang=lang, image_bytes=image_bytes, mime_type=mime_type,
-            primary=primary, secondary=secondary,
+            primary=primary, secondary=secondary, level=level,
         )
     except ValueError as e:
         return jsonify(err(str(e), code="invalid_input")), 400

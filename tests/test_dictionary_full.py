@@ -118,7 +118,7 @@ def test_llm_provider_normalizes_response(fresh, monkeypatch):
          "explanations": {"primary": "House.", "secondary": "房子。"}},
     ]}
 
-    def fake(*, lang, word, explanation_primary=None, explanation_secondary=None):
+    def fake(*, lang, word, explanation_primary=None, explanation_secondary=None, **_kw):
         return payload
     monkeypatch.setattr(llm_svc, "lookup_word_via_llm", fake)
 

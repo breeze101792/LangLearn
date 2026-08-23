@@ -77,6 +77,77 @@ def _lang_name(code: str | None) -> str:
     return code
 
 
+# ---- Level directive ----------------------------------------------------
+#
+# When the user has set a CEFR level (A1..C2) for the target language,
+# we tell the model what that level is so it picks vocabulary and
+# grammar appropriate to the learner. ``None`` means "unset" — the
+# model is told nothing and behaves as it did before this feature
+# existed. The directive is a short, level-specific paragraph appended
+# to the system prompt so every target-language generation path
+# (Analyze, Refine, Translate, Describe, seed, fill, dictionary lookup,
+# apply-explanations) gets the same guidance with no per-call branching.
+#
+# The guidance is deliberately concrete ("use simple vocabulary",
+# "avoid advanced grammar") rather than just naming the level, since
+# models vary in how reliably they map a bare "B1" label to concrete
+# output choices.
+
+_LEVEL_GUIDANCE: dict[str, str] = {
+    "A1": (
+        "The learner is a beginner (CEFR A1). Use only the most common, "
+        "everyday words and very short, simple sentences. Avoid idioms, "
+        "slang, and any grammar beyond the present tense unless the task "
+        "explicitly requires it. Prefer high-frequency vocabulary."
+    ),
+    "A2": (
+        "The learner is an elementary learner (CEFR A2). Use common, "
+        "everyday vocabulary and short sentences. Basic past and future "
+        "tenses are fine; avoid complex subordinate clauses and idiomatic "
+        "expressions the learner is unlikely to know."
+    ),
+    "B1": (
+        "The learner is an intermediate learner (CEFR B1). Use everyday, "
+        "neutral vocabulary and a range of common tenses. Some idioms and "
+        "common collocations are fine; avoid rare literary vocabulary and "
+        "very complex sentence structures."
+    ),
+    "B2": (
+        "The learner is an upper-intermediate learner (CEFR B2). Use a "
+        "broad range of vocabulary including some less common words and "
+        "idioms. Complex sentences and a variety of tenses are welcome; "
+        "still avoid highly specialised or literary language unless the "
+        "task calls for it."
+    ),
+    "C1": (
+        "The learner is an advanced learner (CEFR C1). Use a wide range "
+        "of vocabulary, including idiomatic and nuanced expressions and "
+        "less common collocations. Complex grammar and a variety of "
+        "registers are appropriate. The learner can handle advanced "
+        "material; do not simplify the language."
+    ),
+    "C2": (
+        "The learner is proficient (CEFR C2). Use the full range of the "
+        "language, including idioms, colloquialisms, nuanced vocabulary, "
+        "and complex grammar, exactly as a fluent native speaker would. "
+        "Do not simplify or limit the language in any way."
+    ),
+}
+
+
+def _level_directive(level: str | None) -> str:
+    """Return a system-prompt fragment describing the user's CEFR level
+    for the target language, or "" when no level is set. The caller
+    appends this to the system prompt so every generation path gets the
+    same guidance."""
+    if not level:
+        return ""
+    guidance = _LEVEL_GUIDANCE.get(level.upper())
+    if not guidance:
+        return ""
+    return " " + guidance
+
+
 def _should_generate_primary(target_lang: str, primary: str | None) -> bool:
     if not primary:
         return False
@@ -631,7 +702,8 @@ def _normalize_seed_batch(data: Any, *, array_name: str) -> dict:
 
 
 def lookup_word_via_llm(*, lang: str, word: str, explanation_primary: str | None,
-                        explanation_secondary: str | None) -> dict:
+                        explanation_secondary: str | None,
+                        level: str | None = None) -> dict:
     primary = explanation_primary or lang
     secondary = explanation_secondary
     # When any of the three languages is Chinese, steer the model toward
@@ -646,6 +718,7 @@ def lookup_word_via_llm(*, lang: str, word: str, explanation_primary: str | None
         "provided schema. Do not include prose, code fences, or commentary. "
         "Provide concise, accurate glosses and one natural example per sense."
         + script_note
+        + _level_directive(level)
     )
     user = (
         f"Target language (the dictionary's language): {_lang_name(lang)} ({lang})\n"
@@ -784,10 +857,12 @@ def _seed_one_batch(
     target_name: str,
     primary_name: str,
     secondary_name: str,
+    level: str | None = None,
 ) -> list[dict]:
     system = (
         "You generate concise language-learning content. Return ONLY a JSON "
         "object matching the schema. No prose, no code fences."
+        + _level_directive(level)
     )
     user = _build_seed_user_prompt(
         lang=lang, n=n, kind=kind, primary=primary, secondary=secondary,
@@ -811,6 +886,7 @@ def generate_structures_via_llm(
     primary: str | None = None,
     secondary: str | None = None,
     batch_size: int | None = None,
+    level: str | None = None,
 ) -> list[dict]:
     """Generate `n` structures for `lang` in batches of `batch_size`
     (default ``SEED_BATCH_SIZE``). Returns a list of structure dicts."""
@@ -838,6 +914,7 @@ def generate_structures_via_llm(
             require_primary=keep_primary,
             target_name=target_name,
             primary_name=primary_name, secondary_name=secondary_name,
+            level=level,
         )
         out.extend(batch)
         remaining -= count
@@ -849,6 +926,7 @@ def generate_phrases_via_llm(
     primary: str | None = None,
     secondary: str | None = None,
     batch_size: int | None = None,
+    level: str | None = None,
 ) -> list[dict]:
     """Generate `n` phrases for `lang` in batches of `batch_size`
     (default ``SEED_BATCH_SIZE``). Returns a list of phrase dicts."""
@@ -876,6 +954,7 @@ def generate_phrases_via_llm(
             require_primary=keep_primary,
             target_name=target_name,
             primary_name=primary_name, secondary_name=secondary_name,
+            level=level,
         )
         out.extend(batch)
         remaining -= count
@@ -885,7 +964,8 @@ def generate_phrases_via_llm(
 def generate_seed_payload(lang: str, n_structures: int, n_phrases: int,
                           *, primary: str | None = None,
                           secondary: str | None = None,
-                          batch_size: int | None = None) -> dict:
+                          batch_size: int | None = None,
+                          level: str | None = None) -> dict:
     """Generate a starter set of structures and phrases for `lang`.
 
     `primary` / `secondary` are the user's native explanation languages
@@ -901,11 +981,11 @@ def generate_seed_payload(lang: str, n_structures: int, n_phrases: int,
     """
     structures = generate_structures_via_llm(
         lang=lang, n=n_structures, primary=primary, secondary=secondary,
-        batch_size=batch_size,
+        batch_size=batch_size, level=level,
     )
     phrases = generate_phrases_via_llm(
         lang=lang, n=n_phrases, primary=primary, secondary=secondary,
-        batch_size=batch_size,
+        batch_size=batch_size, level=level,
     )
     payload = {"structures": structures, "phrases": phrases}
     apply_explanation_rules(
@@ -973,18 +1053,21 @@ def _fill_one_batch(
     lang: str, primary: str | None, secondary: str | None,
     keep_primary: bool, keep_secondary: bool,
     target_name: str, primary_name: str, secondary_name: str,
+    level: str | None = None,
 ) -> list[dict]:
     if kind == "structure":
         system = (
             "You complete sentence-structure entries for language learners. "
             "Return ONLY a JSON object matching the schema. Only fill empty fields. "
             "Do not invent values for fields the user already provided."
+            + _level_directive(level)
         )
     else:
         system = (
             "You complete phrase entries for language learners. "
             "Return ONLY a JSON object matching the schema. Only fill empty fields. "
             "Do not invent values for fields the user already provided."
+            + _level_directive(level)
         )
     user = _build_fill_user_prompt(
         kind=kind, lang=lang, partials=partials,
@@ -1010,6 +1093,7 @@ def fill_structures_via_llm(
     *, lang: str, partials: list[dict],
     primary: str | None = None, secondary: str | None = None,
     batch_size: int | None = None,
+    level: str | None = None,
 ) -> list[dict]:
     """Fill in null fields for a batch of partial structure dicts.
     Each input partial becomes one filled output dict. Batched."""
@@ -1033,6 +1117,7 @@ def fill_structures_via_llm(
                 keep_primary=keep_primary, keep_secondary=keep_secondary,
                 target_name=target_name,
                 primary_name=primary_name, secondary_name=secondary_name,
+                level=level,
             )
         )
     return out
@@ -1042,6 +1127,7 @@ def fill_phrases_via_llm(
     *, lang: str, partials: list[dict],
     primary: str | None = None, secondary: str | None = None,
     batch_size: int | None = None,
+    level: str | None = None,
 ) -> list[dict]:
     """Fill in null fields for a batch of partial phrase dicts.
     Each input partial becomes one filled output dict. Batched."""
@@ -1065,6 +1151,7 @@ def fill_phrases_via_llm(
                 keep_primary=keep_primary, keep_secondary=keep_secondary,
                 target_name=target_name,
                 primary_name=primary_name, secondary_name=secondary_name,
+                level=level,
             )
         )
     return out
@@ -1072,22 +1159,24 @@ def fill_phrases_via_llm(
 
 def fill_structure_via_llm(*, lang: str, partial: dict,
                             primary: str | None = None,
-                            secondary: str | None = None) -> dict:
+                            secondary: str | None = None,
+                            level: str | None = None) -> dict:
     """Single-row convenience wrapper around :func:`fill_structures_via_llm`."""
     items = fill_structures_via_llm(
         lang=lang, partials=[partial],
-        primary=primary, secondary=secondary, batch_size=1,
+        primary=primary, secondary=secondary, batch_size=1, level=level,
     )
     return items[0] if items else {}
 
 
 def fill_phrase_via_llm(*, lang: str, partial: dict,
                          primary: str | None = None,
-                         secondary: str | None = None) -> dict:
+                         secondary: str | None = None,
+                         level: str | None = None) -> dict:
     """Single-row convenience wrapper around :func:`fill_phrases_via_llm`."""
     items = fill_phrases_via_llm(
         lang=lang, partials=[partial],
-        primary=primary, secondary=secondary, batch_size=1,
+        primary=primary, secondary=secondary, batch_size=1, level=level,
     )
     return items[0] if items else {}
 
@@ -1265,6 +1354,7 @@ def analyze_text_via_llm(
     *, lang: str, text: str,
     primary: str | None = None,
     secondary: str | None = None,
+    level: str | None = None,
 ) -> dict:
     """Ask the LLM to extract structures, phrases, and hard words from
     ``text`` (in ``lang``). Returns the parsed dict matching
@@ -1299,6 +1389,7 @@ def analyze_text_via_llm(
         "You extract language-learning content from a short text. Return ONLY "
         "a JSON object matching the schema. No prose, no code fences."
         + script_note
+        + _level_directive(level)
     )
     user = _build_analyze_user_prompt(
         lang=lang, text=text,
@@ -1518,6 +1609,7 @@ def refine_text_via_llm(
     *, lang: str, text: str,
     primary: str | None = None,
     secondary: str | None = None,
+    level: str | None = None,
 ) -> dict:
     """Ask the LLM to correct and rewrite a sentence or short paragraph
     in ``lang``. Returns the parsed dict matching :data:`REFINE_SCHEMA`:
@@ -1548,6 +1640,7 @@ def refine_text_via_llm(
         "Return ONLY a JSON object matching the schema. No prose, "
         "no code fences."
         + script_note
+        + _level_directive(level)
     )
     user = _build_refine_user_prompt(
         lang=lang, text=text,
@@ -1928,6 +2021,7 @@ def translate_text_via_llm(
     *, target_lang: str, text: str,
     primary: str | None = None,
     secondary: str | None = None,
+    level: str | None = None,
 ) -> dict:
     """Ask the LLM to translate ``text`` (in any source language, auto-
     detected by the model) into ``target_lang`` (the language being
@@ -1965,6 +2059,7 @@ def translate_text_via_llm(
         "Return ONLY a JSON object matching the schema. No prose, "
         "no code fences."
         + script_note
+        + _level_directive(level)
     )
     user = _build_translate_user_prompt(
         target_lang=target_lang, text=text,
@@ -2103,6 +2198,7 @@ def _apply_explanations_one_batch(
     secondary_name: str,
     field_a: str,
     field_b: str,
+    level: str | None = None,
 ) -> list[dict]:
     """Run one chunk through the LLM and return the per-row items."""
     system = (
@@ -2110,6 +2206,7 @@ def _apply_explanations_one_batch(
         "Return ONLY a JSON object matching the schema. Do NOT change "
         "the row's target-language pattern/example_sentence/phrase; "
         "only fill in the explanation columns."
+        + _level_directive(level)
     )
     rules = _build_apply_rules(
         lang, primary, secondary, target_name, primary_name, secondary_name,
@@ -2148,7 +2245,8 @@ def apply_explanations_via_llm(*, lang: str,
                                 phrases: list[dict],
                                 primary: str | None = None,
                                 secondary: str | None = None,
-                                batch_size: int | None = None) -> dict:
+                                batch_size: int | None = None,
+                                level: str | None = None) -> dict:
     """Translate existing target-language content into the user's
     primary/secondary natives. Returns a dict
     ``{"structures": [{id, explanation?, explanation_primary?, explanation_secondary?}, ...],
@@ -2193,6 +2291,7 @@ def apply_explanations_via_llm(*, lang: str,
                 secondary_name=secondary_name,
                 field_a="pattern",
                 field_b="example_sentence",
+                level=level,
             )
         )
     out_phrases: list[dict] = []
@@ -2209,6 +2308,7 @@ def apply_explanations_via_llm(*, lang: str,
                 secondary_name=secondary_name,
                 field_a="phrase",
                 field_b="example_sentence",
+                level=level,
             )
         )
     return {"structures": out_structures, "phrases": out_phrases}
@@ -2424,6 +2524,7 @@ def describe_image_via_llm(
     *, target_lang: str, image_bytes: bytes, mime_type: str = "image/jpeg",
     primary: str | None = None,
     secondary: str | None = None,
+    level: str | None = None,
 ) -> dict:
     """Ask a vision-capable LLM to describe ``image_bytes`` in ``target_lang``
     and extract concrete vocabulary items visible in it. Returns the
@@ -2465,6 +2566,7 @@ def describe_image_via_llm(
         "study. Return ONLY a JSON object matching the schema. No prose, "
         "no code fences."
         + script_note
+        + _level_directive(level)
     )
     user_text = _build_describe_user_prompt(
         target_name=target_name,

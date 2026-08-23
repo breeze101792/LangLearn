@@ -285,7 +285,7 @@ def test_apply_explanations_skips_non_dict_and_non_int_items(fresh, monkeypatch)
         )
 
     def fake_apply_via_llm(*, lang, structures, phrases, primary, secondary,
-                           batch_size=None):
+                           batch_size=None, **_kw):
         return {
             "structures": [
                 {"id": 1, "explanation_primary": "p",

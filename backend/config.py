@@ -82,6 +82,13 @@ MIGRATIONS_DIR: Path = Path(__file__).resolve().parent / "migrations"
 DEFAULT_USER_ID = 1
 DEFAULT_LANGUAGE = "en"
 
+# CEFR proficiency levels a user can set per target language. Stored as
+# a JSON map {lang_code: level} in the settings row. ``None`` (unset) is
+# the default for every language: the LLM is told nothing about level
+# and behaves as it does today. Order matters — the Settings UI renders
+# these in this order, low to high.
+CEFR_LEVELS: list[str] = ["A1", "A2", "B1", "B2", "C1", "C2"]
+
 LANGUAGE_CATALOG: list[dict] = [
     {"code": "en", "display_name": "English", "is_built_in": 1},
     {"code": "es", "display_name": "Spanish", "is_built_in": 0},

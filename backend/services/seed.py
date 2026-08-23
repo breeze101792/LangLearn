@@ -128,10 +128,12 @@ def seed_via_llm(lang: str, user_id: int = config.DEFAULT_USER_ID,
     user_settings = settings_svc.get_settings(user_id)
     primary = user_settings.get("explanation_primary")
     secondary = user_settings.get("explanation_secondary")
+    level = settings_svc.get_language_level(lang, user_id)
     try:
         payload = generate_seed_payload(
             lang, n_structures, n_phrases,
             primary=primary, secondary=secondary,
+            level=level,
         )
     except LLMError:
         raise
@@ -215,6 +217,7 @@ def apply_explanations(lang: str, user_id: int = config.DEFAULT_USER_ID) -> dict
     user_settings = settings_svc.get_settings(user_id)
     primary = user_settings.get("explanation_primary")
     secondary = user_settings.get("explanation_secondary")
+    level = settings_svc.get_language_level(lang, user_id)
 
     with get_conn() as conn:
         struct_rows = conn.execute(
@@ -235,7 +238,7 @@ def apply_explanations(lang: str, user_id: int = config.DEFAULT_USER_ID) -> dict
 
     payload = llm_svc.apply_explanations_via_llm(
         lang=lang, structures=structures, phrases=phrases,
-        primary=primary, secondary=secondary,
+        primary=primary, secondary=secondary, level=level,
     )
 
     updated_s = 0

@@ -245,12 +245,14 @@ def fill_structure():
     user_settings = settings_svc.get_settings(config.DEFAULT_USER_ID)
     primary = user_settings.get("explanation_primary")
     secondary = user_settings.get("explanation_secondary")
+    level = settings_svc.get_language_level(lang, config.DEFAULT_USER_ID)
     try:
         filled = llm_svc.fill_structure_via_llm(
             lang=lang,
             partial=partial,
             primary=primary,
             secondary=secondary,
+            level=level,
         )
     except llm_svc.LLMError as e:
         return jsonify(err(str(e), code="llm_error")), 502

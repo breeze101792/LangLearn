@@ -38,6 +38,7 @@ export function renderSettings(host) {
     <section class="settings">
       <nav class="settings__nav" aria-label="Settings sections">
         <button class="settings__nav-item settings__nav-item--active" data-section="general">General</button>
+        <button class="settings__nav-item" data-section="levels">Language levels</button>
         <button class="settings__nav-item" data-section="dict-chain">Dictionary chain</button>
         <button class="settings__nav-item" data-section="init">Initialize data</button>
         <button class="settings__nav-item" data-section="backup">Backup &amp; restore</button>
@@ -58,6 +59,7 @@ export function renderSettings(host) {
   function renderMain() {
     const main = host.querySelector("#settings-main");
     if (activeSection === "general") renderGeneral(main);
+    else if (activeSection === "levels") renderLevels(main);
     else if (activeSection === "dict-chain") renderDictChain(main);
     else if (activeSection === "backup") renderTransfer(main);
     else renderInit(main);
@@ -234,6 +236,46 @@ export function renderSettings(host) {
         renderActions();
       });
     }
+  }
+
+  function renderLevels(main) {
+    const levels = settings.language_levels_json || {};
+    const CEFR = ["A1", "A2", "B1", "B2", "C1", "C2"];
+    main.innerHTML = `
+      <div class="settings__section">
+        <h2 class="card__title">Language levels</h2>
+        <p class="field__hint">Set your CEFR proficiency level for each language you're learning. The AI uses this to pick vocabulary and grammar suited to your level. Unset means the AI is told nothing and behaves as before.</p>
+        <div class="card">
+          ${languages.map((l) => {
+            const current = levels[l.code] || "";
+            return `
+              <div class="settings__row">
+                <div class="settings__row__label">${escapeHtml(l.display_name)} <span class="field__hint">(${escapeHtml(l.code)})</span></div>
+                <select class="select" data-level-lang="${escapeHtml(l.code)}" style="max-width: 240px">
+                  <option value="">Unset</option>
+                  ${CEFR.map((c) => `<option value="${c}" ${c === current ? "selected" : ""}>${c}</option>`).join("")}
+                </select>
+              </div>
+            `;
+          }).join("")}
+        </div>
+      </div>
+    `;
+    main.querySelectorAll("select[data-level-lang]").forEach((sel) => {
+      sel.addEventListener("change", (e) => {
+        const lang = sel.dataset.levelLang;
+        const value = e.target.value || null;
+        const next = { ...(settings.language_levels_json || {}) };
+        if (value) {
+          next[lang] = value;
+        } else {
+          delete next[lang];
+        }
+        dirty.language_levels_json = next;
+        settings.language_levels_json = next;
+        renderActions();
+      });
+    });
   }
 
   function renderDictChain(main) {

@@ -33,6 +33,7 @@ def lookup():
         return jsonify(err("word must be 1-200 chars of letters", code="invalid_word")), 400
     settings = settings_svc.get_settings(config.DEFAULT_USER_ID)
     chain = settings["dict_chain_json"].get(lang, []) if isinstance(settings["dict_chain_json"], dict) else []
+    level = settings_svc.get_language_level(lang, config.DEFAULT_USER_ID)
 
     used_provider: str | None = None
     if provider_override is not None:
@@ -52,6 +53,7 @@ def lookup():
             word=word, lang=lang, provider_name=provider_override,
             explanation_primary=settings.get("explanation_primary"),
             explanation_secondary=settings.get("explanation_secondary"),
+            level=level,
         )
         used_provider = provider_override
     else:
@@ -61,6 +63,7 @@ def lookup():
             chain=chain,
             explanation_primary=settings.get("explanation_primary"),
             explanation_secondary=settings.get("explanation_secondary"),
+            level=level,
         )
     entry = result.entry
     chain_errors = result.errors
@@ -122,6 +125,7 @@ def force_provider(provider: str):
         word=word, lang=lang, provider_name=provider,
         explanation_primary=settings.get("explanation_primary"),
         explanation_secondary=settings.get("explanation_secondary"),
+        level=settings_svc.get_language_level(lang, config.DEFAULT_USER_ID),
     )
     entry = result.entry
     auto_added = False

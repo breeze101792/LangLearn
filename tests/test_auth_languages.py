@@ -318,7 +318,7 @@ def test_apply_explanations_writes_translations_via_stubbed_llm(
 
     def fake_apply_via_llm(
         *, lang, structures, phrases, primary, secondary,
-        batch_size=None,
+        batch_size=None, **_kw,
     ):
         # Confirm settings' primary was threaded through.
         assert primary == "en"
@@ -404,7 +404,7 @@ def test_apply_explanations_does_not_touch_target_language_content(
 
     def fake_apply_via_llm(
         *, lang, structures, phrases, primary, secondary,
-        batch_size=None,
+        batch_size=None, **_kw,
     ):
         # Note: the schema FORBIDS returning pattern/example_sentence
         # for the apply path, but defensively, the seed service copies
