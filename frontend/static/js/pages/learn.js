@@ -212,10 +212,6 @@ function renderSession(host) {
         <span class="review-card__prompt">${escapeHtml(item.word)}</span>
         <button type="button" class="word-card__speak" data-action="speak" data-word="${escapeHtml(item.word)}" data-lang="${escapeHtml(item.language)}" aria-label="Pronounce ${escapeHtml(item.word)}" title="Pronounce ${escapeHtml(item.word)}">🔊</button>
       </div>
-      <div class="review-card__sub">
-        <span class="word-card__pos">${escapeHtml(item.pos || "—")}</span>
-        <span class="review-card__gloss">${escapeHtml(item.glossary || "")}</span>
-      </div>
       <p class="field__hint">Recall the meaning, then reveal. Or skip if you already know it.</p>
       <div class="review-card__actions" id="review-actions">
         <button id="reveal" class="btn btn--primary btn--lg">Reveal (Space)</button>
