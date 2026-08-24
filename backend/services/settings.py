@@ -30,13 +30,35 @@ ALLOWED_KEYS = set(DEFAULTS.keys())
 
 
 def default_dict_chain() -> dict[str, list[dict]]:
-    """Initial chain: WordNet (where supported) then LLM, per language."""
+    """Initial chain: WordNet (when installed and applicable) then LLM,
+    per language. We only seed the chain with providers the user has
+    actually installed — every catalog entry besides the auto-install
+    ones is opt-in, and pre-populating the chain with uninstalled
+    providers would be misleading.
+
+    WordNet is auto-installed on first boot, so this naturally includes
+    it for ``en``. Other languages get LLM-only until the user installs
+    an offline dictionary from the Settings UI.
+    """
+    from .dictionaries import installer as dict_installer
+    # Make sure bundled dictionaries are installed before we read the
+    # install set. Tests call ``default_dict_chain`` directly without
+    # going through ``create_default_settings``; this keeps the two paths
+    # consistent. Idempotent — the installer no-ops on existing rows.
+    dict_installer.auto_install_defaults()
+    installed_raw = dict_installer.installed_providers()
+    installed: dict[str, set[str]] = (
+        installed_raw if isinstance(installed_raw, dict) else {}
+    )
     chain: dict[str, list[dict]] = {}
     for lang in config.LANGUAGE_CATALOG:
         code = lang["code"]
-        providers = []
-        if code == "en":
-            providers.append({"name": "wordnet", "enabled": True})
+        providers: list[dict] = []
+        # Add every offline dictionary installed for this language, in
+        # catalog order. Today this is only wordnet for ``en``; future
+        # catalogs can have multiple providers per language.
+        for provider in sorted(installed.get(code, set())):
+            providers.append({"name": provider, "enabled": True})
         providers.append({"name": "llm", "enabled": True})
         chain[code] = providers
     return chain
@@ -54,6 +76,11 @@ def get_settings(user_id: int = config.DEFAULT_USER_ID) -> dict:
 
 
 def create_default_settings(user_id: int = config.DEFAULT_USER_ID) -> None:
+    # Make sure the offline dictionaries that ship in the box (WordNet for
+    # English today) are installed before we read the installed-set to
+    # build the default chain. Idempotent on subsequent calls.
+    from .dictionaries import installer as dict_installer
+    dict_installer.auto_install_defaults()
     chain_json = json.dumps(default_dict_chain(), ensure_ascii=False)
     from . import seed as seed_svc
     seed_svc.ensure_language_row(DEFAULTS["active_language"], "English", is_built_in=1)

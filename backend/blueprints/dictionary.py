@@ -11,6 +11,7 @@ log = logging.getLogger(__name__)
 from .. import config
 from ..services import settings as settings_svc
 from ..services import vocab as vocab_svc
+from ..services.dictionaries import installer as dict_installer
 from ..services.dictionaries import registry
 from ..services.dictionaries import suggest as suggest_svc
 from ..util import err, is_valid_lang, is_word, normalize_word, ok
@@ -150,14 +151,17 @@ def force_provider(provider: str):
 @bp.get("/providers")
 def providers():
     """List registered providers with display metadata and, when `lang` is
-    passed as a query parameter, which ones support that language."""
+    passed as a query parameter, which ones support that language and
+    are currently installed for it."""
     lang = request.args.get("lang")
     if lang is not None and (not isinstance(lang, str) or not is_valid_lang(lang)):
         return jsonify(err("invalid language", code="invalid_lang")), 400
     items = registry.available_providers_detailed()
     if lang is not None:
+        installed = registry.installed_providers_for(lang)
         for item in items:
             item["supports"] = registry.supports_provider(item["name"], lang)
+            item["installed"] = item["name"] in installed
     llm_ready, llm_kind = _llm_status()
     for item in items:
         if item.get("name") == "llm":
@@ -165,6 +169,77 @@ def providers():
             item["provider_kind"] = llm_kind
     return ok({"providers": items, "llm_configured": llm_ready,
                "llm_provider_kind": llm_kind})
+
+
+@bp.get("/catalog")
+def catalog():
+    """Available offline dictionaries with per-language install status.
+
+    Shape: ``{"entries": [...], "installed": {lang: [provider, ...]}}``.
+    The Settings UI consumes this to render the install / uninstall
+    controls. LLM is intentionally absent from the catalog — it has no
+    install state, it's always available as a fallback.
+    """
+    lang = request.args.get("lang")
+    if lang is not None and (not isinstance(lang, str) or not is_valid_lang(lang)):
+        return jsonify(err("invalid language", code="invalid_lang")), 400
+    entries = dict_installer.catalog_view(lang)
+    installed_raw = dict_installer.installed_providers()
+    installed_dict = installed_raw if isinstance(installed_raw, dict) else {}
+    installed = {k: sorted(v) for k, v in installed_dict.items()}
+    return ok({"entries": entries, "installed": installed})
+
+
+@bp.post("/install")
+def install_dictionary():
+    """Mark ``{provider, language}`` as installed. Idempotent.
+
+    For v1 this is just a marker row — WordNet's data was already
+    fetched by NLTK at first lookup. Future offline dictionaries with
+    large data files will do their download here.
+    """
+    body = request.get_json(silent=True) or {}
+    provider = body.get("provider")
+    language = body.get("language")
+    if not isinstance(provider, str) or not provider:
+        return jsonify(err("provider is required", code="invalid_provider")), 400
+    if not isinstance(language, str) or not is_valid_lang(language):
+        return jsonify(err("invalid language", code="invalid_lang")), 400
+    try:
+        result = dict_installer.install(provider, language)
+    except ValueError as e:
+        return jsonify(err(str(e), code="unknown_dictionary")), 404
+    return ok({
+        "provider": result.provider,
+        "language": result.language,
+        "installed": result.installed,
+        "already": result.already,
+        "source": result.source,
+    })
+
+
+@bp.post("/uninstall")
+def uninstall_dictionary():
+    """Drop the install row for ``{provider, language}``. The UI prevents
+    uninstalling auto-installed dictionaries; this endpoint enforces the
+    same invariant on the server side."""
+    body = request.get_json(silent=True) or {}
+    provider = body.get("provider")
+    language = body.get("language")
+    if not isinstance(provider, str) or not provider:
+        return jsonify(err("provider is required", code="invalid_provider")), 400
+    if not isinstance(language, str) or not is_valid_lang(language):
+        return jsonify(err("invalid language", code="invalid_lang")), 400
+    from ..services.dictionaries import catalog as catalog_mod
+    if catalog_mod.find(provider, language) is None:
+        return jsonify(err("unknown dictionary", code="unknown_dictionary")), 404
+    if dict_installer.is_protected(provider, language):
+        return jsonify(err(
+            f"{provider} is a default dictionary for {language} and cannot be uninstalled",
+            code="protected_dictionary",
+        )), 409
+    removed = dict_installer.uninstall(provider, language)
+    return ok({"provider": provider, "language": language, "removed": removed})
 
 
 def _llm_status() -> tuple[bool, str]:

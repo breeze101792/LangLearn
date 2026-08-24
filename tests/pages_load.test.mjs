@@ -60,8 +60,16 @@ globalThis.Node = window.Node;
 globalThis.Event = window.Event;
 globalThis.MouseEvent = window.MouseEvent;
 globalThis.KeyboardEvent = window.KeyboardEvent;
-globalThis.localStorage = window.localStorage;
+  globalThis.localStorage = window.localStorage;
 globalThis.sessionStorage = window.sessionStorage;
+// JSDOM doesn't implement matchMedia. main.js calls it inside boot() at
+// module-load time and would otherwise throw an unhandled rejection
+// during the import test. Stub it with a "no-preference" response.
+if (!window.matchMedia) {
+  window.matchMedia = () => ({ matches: false, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {} });
+}
+globalThis.matchMedia = window.matchMedia;
+console.log("DEBUG matchMedia stub installed:", typeof window.matchMedia);
 // Stub fetch so the page render's async load() doesn't hit the
 // network. Pages fall back to an error state when the response is not
 // ok, which is fine for the smoke test.
@@ -409,6 +417,112 @@ await testAsync("REGRESSION: assist subpages do not leak state into each other",
     `expected refine text preserved, got "${snap.text}"`);
   assert(snap.lastResult && snap.lastResult.corrected === "she would rather stay",
     "expected refine lastResult preserved");
+});
+
+// 8) REGRESSION: Settings page "Offline dictionaries" section must
+//    render catalog entries from the API and wire Install / Uninstall
+//    buttons without throwing. Catches broken template strings, missing
+//    data attributes, and fetch wiring issues that wouldn't show up in
+//    the import-only smoke check.
+await testAsync("REGRESSION: settings Offline dictionaries section renders catalog + buttons", async () => {
+  const settingsMod = await importFresh("../frontend/static/js/pages/settings.js");
+  const stateMod = await import("../frontend/static/js/state.js");
+
+  stateMod.store.set({
+    settings: { active_language: "en", theme: "auto" },
+    languages: [{ code: "en", display_name: "English" }],
+  });
+
+  // Stub fetch to return one installed (WordNet) and one not-installed entry.
+  const sample = {
+    ok: true,
+    data: {
+      entries: [
+        {
+          provider: "wordnet",
+          display_name: "WordNet",
+          description: "English lexical database.",
+          languages: ["en"],
+          auto_install: true,
+          source: "bundled",
+          size_hint: "~30 MB",
+          installed_languages: ["en"],
+        },
+        {
+          provider: "freedict-en-es",
+          display_name: "FreeDict EN-ES",
+          description: "Bidirectional English-Spanish dictionary.",
+          languages: ["en", "es"],
+          auto_install: false,
+          source: "download",
+          size_hint: "~5 MB",
+          installed_languages: [],
+        },
+      ],
+      installed: { en: ["wordnet"] },
+    },
+  };
+
+  let settingsCalls = 0;
+  globalThis.fetch = async (url) => {
+    if (String(url).includes("/api/dictionary/catalog")) {
+      return { ok: true, status: 200, json: async () => sample };
+    }
+    if (String(url).includes("/api/tts/providers")) {
+      return { ok: true, status: 200, json: async () => ({ ok: true, data: { providers: [] } }) };
+    }
+    if (String(url).includes("/api/settings")) {
+      settingsCalls++;
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ ok: true, data: stateMod.store.get().settings }),
+      };
+    }
+    return { ok: false, status: 404, statusText: "stub", json: async () => ({ ok: false }) };
+  };
+
+  // Drain any pending main.js route() calls that earlier tests triggered
+  // via hashchange. They keep running in the background and would race
+  // with our render and wipe it. Several macrotask ticks let them land.
+  for (let i = 0; i < 20; i++) {
+    await new Promise((r) => setTimeout(r, 0));
+  }
+
+  const host = window.document.getElementById("app-main");
+  host.innerHTML = "";
+  await settingsMod.renderSettings(host);
+
+  // Switch to the new section by clicking the nav button.
+  const navBtn = host.querySelector('[data-section="dictionaries"]');
+  assert(navBtn, "Offline dictionaries nav button missing");
+  navBtn.click();
+
+  // Let the async fetch + render settle. ``renderDictionaries`` awaits
+  // the catalog fetch before populating the list, and the page also
+  // re-renders once ``loadTtsProviders`` resolves on initial mount.
+  for (let i = 0; i < 20; i++) {
+    await new Promise((r) => setTimeout(r, 0));
+  }
+
+  const list = host.querySelector("#dict-list");
+  assert(list, "dict-list container missing after renders settled");
+  const items = list.querySelectorAll("[data-provider]");
+  assert(items.length === 2, `expected 2 catalog entries, got ${items.length}`);
+
+  const wnItem = list.querySelector('[data-provider="wordnet"]');
+  assert(wnItem, "wordnet entry missing");
+  assert(wnItem.dataset.langs === "en", `wordnet langs: ${wnItem.dataset.langs}`);
+  // Auto-installed -> no Install/Uninstall button (shows "Default for..." hint instead).
+  assert(!wnItem.querySelector("[data-action='install']"), "wordnet should not show Install button");
+  assert(!wnItem.querySelector("[data-action='uninstall']"), "auto-installed wordnet should not show Uninstall button");
+  assert(wnItem.querySelector(".badge--builtin"), "expected 'Always on' badge on auto-installed entry");
+
+  const futureItem = list.querySelector('[data-provider="freedict-en-es"]');
+  assert(futureItem, "freedict-en-es entry missing");
+  assert(futureItem.dataset.langs === "en,es", `freedict langs: ${futureItem.dataset.langs}`);
+  const installBtn = futureItem.querySelector("[data-action='install']");
+  assert(installBtn, "Install button missing for not-installed entry");
 });
 
 console.log(`\n${passed} passed, ${failures} failed`);

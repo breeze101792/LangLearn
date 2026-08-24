@@ -40,6 +40,7 @@ export function renderSettings(host) {
         <button class="settings__nav-item settings__nav-item--active" data-section="general">General</button>
         <button class="settings__nav-item" data-section="levels">Language levels</button>
         <button class="settings__nav-item" data-section="dict-chain">Dictionary chain</button>
+        <button class="settings__nav-item" data-section="dictionaries">Offline dictionaries</button>
         <button class="settings__nav-item" data-section="init">Initialize data</button>
         <button class="settings__nav-item" data-section="backup">Backup &amp; restore</button>
       </nav>
@@ -61,6 +62,7 @@ export function renderSettings(host) {
     if (activeSection === "general") renderGeneral(main);
     else if (activeSection === "levels") renderLevels(main);
     else if (activeSection === "dict-chain") renderDictChain(main);
+    else if (activeSection === "dictionaries") renderDictionaries(main);
     else if (activeSection === "backup") renderTransfer(main);
     else renderInit(main);
     renderActions();
@@ -236,6 +238,132 @@ export function renderSettings(host) {
         renderActions();
       });
     }
+  }
+
+  async function renderDictionaries(main) {
+    // First-render skeleton so the layout doesn't jump when data lands.
+    main.innerHTML = `
+      <div class="settings__section">
+        <h2 class="card__title">Offline dictionaries</h2>
+        <p class="field__hint">Bundled dictionaries run on this device with no network. WordNet for English is installed automatically; everything else you install here on demand.</p>
+        <div class="list" id="dict-list" aria-busy="true">
+          <div class="field__hint">Loading…</div>
+        </div>
+      </div>
+    `;
+    const res = await api.get("/api/dictionary/catalog");
+    const list = main.querySelector("#dict-list");
+    list.removeAttribute("aria-busy");
+    if (!res || !res.ok) {
+      list.innerHTML = `<div class="field__hint">Couldn't load the catalog: ${escapeHtml(res?.error || "unknown")}</div>`;
+      return;
+    }
+    const entries = res.data.entries || [];
+    if (!entries.length) {
+      list.innerHTML = `<div class="field__hint">No offline dictionaries available yet.</div>`;
+      return;
+    }
+    const langByCode = Object.fromEntries(languages.map((l) => [l.code, l.display_name]));
+    list.innerHTML = entries.map((e) => renderDictEntry(e, langByCode)).join("");
+    bindDictCatalog(list);
+  }
+
+  function renderDictEntry(entry, langByCode) {
+    const langLabels = (entry.languages || []).map((c) => langByCode[c] || c);
+    const installedLangs = new Set(entry.installed_languages || []);
+    const isProtected = entry.auto_install && installedLangs.size > 0;
+    // ``data-langs`` carries the covered language codes so the click
+    // handler knows which pair to (un)install. Catalog entries today
+    // cover exactly one language; future multi-language entries will
+    // need a per-language picker.
+    const langAttr = (entry.languages || []).join(",");
+    return `
+      <div class="list-item" data-provider="${escapeHtml(entry.provider)}" data-langs="${escapeHtml(langAttr)}">
+        <div class="row">
+          <div class="list-item__main">
+            <strong>${escapeHtml(entry.display_name)}</strong>
+            <div class="field__hint" style="margin-top: var(--sp-1)">${escapeHtml(entry.description)}</div>
+            <div class="field__hint" style="margin-top: var(--sp-1)">
+              Languages: ${langLabels.map(escapeHtml).join(", ") || "—"}
+              ${entry.size_hint ? ` · ${escapeHtml(entry.size_hint)}` : ""}
+              ${entry.source ? ` · ${escapeHtml(entry.source)}` : ""}
+            </div>
+          </div>
+          <div class="list-item__badges">
+            ${isProtected ? `<span class="badge badge--builtin">Always on</span>` : ""}
+            ${installedLangs.size > 0 ? `<span class="badge badge--ok">Installed</span>` : `<span class="badge badge--muted">Not installed</span>`}
+          </div>
+          <div class="spacer"></div>
+          ${installedLangs.size > 0
+            ? (isProtected
+                ? `<span class="field__hint">Default for ${langLabels.map(escapeHtml).join(", ")}</span>`
+                : `<button class="btn btn--ghost" data-action="uninstall">Uninstall</button>`)
+            : `<button class="btn btn--primary" data-action="install">Install</button>`}
+        </div>
+      </div>
+    `;
+  }
+
+  function bindDictCatalog(host) {
+    host.querySelectorAll("[data-action='install']").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const item = btn.closest("[data-provider]");
+        const provider = item.dataset.provider;
+        const langs = (item.dataset.langs || "").split(",").filter(Boolean);
+        const language = langs[0] || "en";
+        btn.disabled = true;
+        const orig = btn.textContent;
+        btn.innerHTML = `<span class="spinner spinner--sm" aria-hidden="true"></span> Installing…`;
+        try {
+          const res = await api.post("/api/dictionary/install", { provider, language });
+          if (!res.ok) {
+            toast({ title: "Install failed", message: res.error, variant: "error" });
+            return;
+          }
+          toast({ title: `${provider} installed`, message: res.data.already ? "Already installed" : "Ready to use", variant: "success", ttl: 2500 });
+          await refreshAfterInstall(host);
+        } finally {
+          if (document.body.contains(item)) {
+            btn.disabled = false;
+            btn.textContent = orig;
+          }
+        }
+      });
+    });
+    host.querySelectorAll("[data-action='uninstall']").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const item = btn.closest("[data-provider]");
+        const provider = item.dataset.provider;
+        const langs = (item.dataset.langs || "").split(",").filter(Boolean);
+        const language = langs[0] || "en";
+        if (!confirm(`Uninstall ${provider}? Word lookups for ${language} will fall back to the AI.`)) return;
+        btn.disabled = true;
+        try {
+          const res = await api.post("/api/dictionary/uninstall", { provider, language });
+          if (!res.ok) {
+            toast({ title: "Uninstall failed", message: res.error, variant: "error" });
+            return;
+          }
+          toast({ title: `${provider} uninstalled`, variant: "success", ttl: 2500 });
+          await refreshAfterInstall(host);
+        } finally {
+          if (document.body.contains(btn)) btn.disabled = false;
+        }
+      });
+    });
+  }
+
+  async function refreshAfterInstall(list) {
+    if (!list) return;
+    const res = await api.get("/api/dictionary/catalog");
+    if (!res || !res.ok) return;
+    const langByCode = Object.fromEntries(languages.map((l) => [l.code, l.display_name]));
+    list.innerHTML = (res.data.entries || []).map((e) => renderDictEntry(e, langByCode)).join("");
+    bindDictCatalog(list);
+    // Refresh store so other views see the new install state when they
+    // next read providers / chain settings.
+    const sRes = await api.get("/api/settings");
+    if (sRes && sRes.ok) store.set({ settings: sRes.data });
   }
 
   function renderLevels(main) {

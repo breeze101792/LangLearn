@@ -48,4 +48,10 @@ def clean_state(monkeypatch, tmp_path):
     vocab_svc._undo_tokens.clear()
     from backend.services import auth_gate
     auth_gate._login_attempts.clear()
+    # Mirror the real app's first-boot behavior so chain-execution tests
+    # can rely on bundled dictionaries (WordNet for English) being
+    # installed without per-test boilerplate. Tests that want to verify
+    # uninstall behavior start from this baseline and then uninstall.
+    from backend.services.dictionaries import installer as dict_installer
+    dict_installer.auto_install_defaults()
     yield tmp_path

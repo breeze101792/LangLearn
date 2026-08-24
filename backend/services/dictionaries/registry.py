@@ -51,7 +51,21 @@ def supports_provider(name: str, lang: str) -> bool:
 
 
 def available_providers() -> list[str]:
+    """Every registered provider name, installed or not. The chain
+    executor and the Settings UI both filter on top of this; this method
+    is the unfiltered registry view."""
     return sorted(PROVIDERS.keys())
+
+
+def installed_providers_for(lang: str) -> set[str]:
+    """Subset of ``available_providers()`` that the user has actually
+    installed for ``lang``. The LLM provider is always considered
+    installed because it has no offline data to fetch."""
+    from . import installer
+    result = installer.installed_providers(lang)
+    installed = result if isinstance(result, set) else set()
+    installed.add("llm")
+    return installed
 
 
 # Built-in display metadata. Add new entries here when registering a new
@@ -93,6 +107,17 @@ def get(name: str) -> Callable[..., WordEntry] | None:
     return PROVIDERS.get(name)
 
 
+def _installed_for(lang: str) -> set[str]:
+    """Set of provider names the user has installed for ``lang``. Lazily
+    imported so the registry module doesn't pull the installer (and its
+    DB-touching code) into import-time of every settings/blueprint path."""
+    from . import installer
+    result = installer.installed_providers(lang)
+    if isinstance(result, set):
+        return result
+    return set()
+
+
 def lookup_via_chain(word: str, lang: str, chain: list[dict], **kwargs) -> ChainResult:
     """Walk the chain in order; first non-empty result wins.
 
@@ -105,6 +130,7 @@ def lookup_via_chain(word: str, lang: str, chain: list[dict], **kwargs) -> Chain
         return ChainResult(entry=WordEntry.empty(word, lang))
     if not isinstance(chain, list):
         return ChainResult(entry=WordEntry.empty(word, lang))
+    installed = _installed_for(lang)
     errors: list[dict] = []
     for entry in chain:
         if not isinstance(entry, dict):
@@ -116,6 +142,12 @@ def lookup_via_chain(word: str, lang: str, chain: list[dict], **kwargs) -> Chain
             continue
         fn = PROVIDERS.get(name)
         if fn is None:
+            continue
+        # The LLM provider is always available (it has no install row — it
+        # talks to the configured remote endpoint). Offline dictionaries
+        # must have an install row, otherwise the user hasn't downloaded
+        # them yet and we'd return false negatives.
+        if name != "llm" and name not in installed:
             continue
         try:
             result = fn(word, lang, **kwargs)
@@ -139,6 +171,8 @@ def lookup_with_provider(word: str, lang: str, provider_name: str, **kwargs) -> 
     """
     fn = PROVIDERS.get(provider_name)
     if fn is None:
+        return ChainResult(entry=WordEntry.empty(word, lang))
+    if provider_name != "llm" and provider_name not in _installed_for(lang):
         return ChainResult(entry=WordEntry.empty(word, lang))
     try:
         entry = fn(word, lang, **kwargs)
