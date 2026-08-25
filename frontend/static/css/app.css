@@ -326,7 +326,8 @@ body.nav-drawer-open { overflow: hidden; }
 /* Word card (dictionary sense card) */
 .word-card { padding: var(--sp-5); }
 .word-card__head {
-  display: flex; flex-direction: column; gap: var(--sp-2);
+  display: flex; flex-direction: row; align-items: center; flex-wrap: wrap;
+  gap: var(--sp-2);
   padding-bottom: var(--sp-4); margin-bottom: var(--sp-5);
   border-bottom: 1px solid var(--border);
 }
@@ -359,6 +360,7 @@ body.nav-drawer-open { overflow: hidden; }
 .word-card__speak--busy { background: var(--accent-soft); }
 .word-card__meta {
   display: flex; align-items: center; gap: var(--sp-2);
+  margin-left: auto;
 }
 .word-card__source-badge {
   display: inline-flex; align-items: center;
@@ -389,7 +391,6 @@ body.nav-drawer-open { overflow: hidden; }
 }
 .word-card__actions {
   display: flex; gap: var(--sp-2);
-  margin-top: var(--sp-2);
 }
 .word-card__senses {
   display: flex; flex-direction: column;
@@ -402,12 +403,6 @@ body.nav-drawer-open { overflow: hidden; }
 .word-card__pos-heading {
   margin: 0;
   display: flex; align-items: center; gap: var(--sp-3);
-}
-.word-card__pos-heading::after {
-  content: "";
-  flex: 1;
-  height: 1px;
-  background: var(--border);
 }
 .word-card__pos-tag {
   font-size: 11px; font-weight: 700;
