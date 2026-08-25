@@ -1,131 +1,202 @@
-"""Edge-case tests for the TTS blueprint's cache and phrase validation.
+"""Tests for the Microsoft Edge TTS provider.
 
-test_tts.py covers the provider, registry, and happy-path HTTP flows. This
-file pins the blueprint's internal helpers that were not exercised there:
-
-- ``_is_speakable_phrase`` boundary cases (non-string, empty, too long,
-  invalid characters)
-- ``_read_cache`` OSError path (path is a directory)
-- ``_write_cache`` failure paths (parent is a file; os.replace failure
-  cleans up the temp file)
-- ``_cache_path`` includes the provider name in the key
+The provider delegates to the ``edge-tts`` package's
+``Communicate.save`` method, which is async and writes MP3 to a
+file. We patch ``edge_tts.Communicate`` so the tests run offline
+and deterministically.
 """
-
 from __future__ import annotations
 
-import os
-from pathlib import Path
+import sys
+import types
 
 import pytest
 
 
 @pytest.fixture
 def fresh(clean_state):
-    """Re-export of the autouse clean_state fixture."""
     return clean_state
 
 
-# ---------- _is_speakable_phrase ----------
+def _fake_mp3_bytes() -> bytes:
+    # Real MP3 frames start with 0xFF. 256 bytes is enough to look
+    # like audio to the magic-byte check the provider runs.
+    return b"\xff" * 256
 
 
-def test_speakable_phrase_rejects_non_string(fresh):
-    from backend.blueprints import tts as tts_bp
-    assert tts_bp._is_speakable_phrase(123) is False
-    assert tts_bp._is_speakable_phrase(None) is False
+class _FakeCommunicateRecorder:
+    """Records every (text, voice) pair handed to ``Communicate`` so
+    tests can assert voice selection without poking at asyncio internals."""
+
+    instances: list = []
+
+    def __init__(self, text, voice, **_kw):
+        self.text = text
+        self.voice = voice
+        _FakeCommunicateRecorder.instances.append((text, voice))
+
+    async def save(self, audio_fname, metadata_fname=None):
+        with open(audio_fname, "wb") as f:
+            f.write(_fake_mp3_bytes())
 
 
-def test_speakable_phrase_rejects_empty(fresh):
-    from backend.blueprints import tts as tts_bp
-    assert tts_bp._is_speakable_phrase("") is False
-    assert tts_bp._is_speakable_phrase("   ") is False
+class _FakeCommunicateEmpty:
+    def __init__(self, *a, **kw):
+        pass
+
+    async def save(self, audio_fname, metadata_fname=None):
+        with open(audio_fname, "wb") as f:
+            f.write(b"")
 
 
-def test_speakable_phrase_rejects_too_long(fresh):
-    from backend.blueprints import tts as tts_bp
-    assert tts_bp._is_speakable_phrase("a" * 201) is False
+class _FakeCommunicateHtml:
+    def __init__(self, *a, **kw):
+        pass
+
+    async def save(self, audio_fname, metadata_fname=None):
+        with open(audio_fname, "wb") as f:
+            f.write(b"<html>error</html>")
 
 
-def test_speakable_phrase_accepts_sentence_punctuation(fresh):
-    from backend.blueprints import tts as tts_bp
-    assert tts_bp._is_speakable_phrase("Hello, world! How are you?") is True
+class _FakeCommunicateBoom:
+    def __init__(self, *a, **kw):
+        pass
+
+    async def save(self, *a, **kw):
+        raise RuntimeError("websocket disconnected")
 
 
-def test_speakable_phrase_rejects_invalid_chars(fresh):
-    from backend.blueprints import tts as tts_bp
-    assert tts_bp._is_speakable_phrase("hello@world") is False
-    assert tts_bp._is_speakable_phrase("hello#world") is False
+def _install_fake_edge_tts(monkeypatch, cls):
+    """Install a stub ``edge_tts`` module so the provider's lazy
+    import picks up our fake ``Communicate`` class."""
+    fake = types.ModuleType("edge_tts")
+    fake.Communicate = cls  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "edge_tts", fake)
 
 
-# ---------- _cache_path ----------
+def _install_recorder(monkeypatch):
+    _FakeCommunicateRecorder.instances = []
+    _install_fake_edge_tts(monkeypatch, _FakeCommunicateRecorder)
+    return _FakeCommunicateRecorder
 
 
-def test_cache_path_includes_provider_in_key(fresh):
-    """The provider name is part of the cache key so switching providers
-    doesn't replay the old provider's audio."""
-    from backend.blueprints import tts as tts_bp
-    p1 = tts_bp._cache_path("en", "hello", "google")
-    p2 = tts_bp._cache_path("en", "hello", "other")
-    assert p1 != p2
-    assert p1.endswith(".mp3")
-    assert "en" in str(p1)
+# ---------- voice selection ----------
 
 
-# ---------- _read_cache ----------
+def test_supports_known_languages(fresh):
+    from backend.services.tts import edge
+    p = edge.EdgeTTS()
+    for lang in ("en", "es", "fr", "de", "pt", "ja", "zh"):
+        assert p.supports(lang) is True, lang
 
 
-def test_read_cache_missing_returns_none(fresh, tmp_path):
-    from backend.blueprints import tts as tts_bp
-    assert tts_bp._read_cache(str(tmp_path / "nope" / "x.mp3")) is None
+def test_supports_unknown_language_rejects(fresh):
+    from backend.services.tts import edge
+    p = edge.EdgeTTS()
+    assert p.supports("zz") is False
+    assert p.supports(None) is False  # type: ignore[arg-type]
+    assert p.supports(123) is False  # type: ignore[arg-type]
 
 
-def test_read_cache_oserror_returns_none(fresh, tmp_path):
-    """Reading a directory raises OSError; the helper must swallow it and
-    return None (treated as a cache miss)."""
-    from backend.blueprints import tts as tts_bp
-    assert tts_bp._read_cache(str(tmp_path)) is None
+# ---------- synth: happy path ----------
 
 
-def test_read_cache_returns_bytes_and_mime(fresh, tmp_path):
-    from backend.blueprints import tts as tts_bp
-    target = tmp_path / "x.mp3"
-    target.write_bytes(b"ID3data")
-    body, ctype = tts_bp._read_cache(str(target))
-    assert body == b"ID3data"
-    assert ctype == "audio/mpeg"
+def test_synth_returns_mp3_bytes(fresh, monkeypatch):
+    from backend.services.tts import edge
+    rec = _install_recorder(monkeypatch)
+
+    body = edge.EdgeTTS().synth("hello", "en")
+
+    assert body == _fake_mp3_bytes()
+    assert rec.instances == [("hello", "en-US-AriaNeural")]
 
 
-# ---------- _write_cache ----------
+def test_synth_picks_correct_voice_per_language(fresh, monkeypatch):
+    from backend.services.tts import edge
+    rec = _install_recorder(monkeypatch)
+
+    cases = [
+        ("en", "en-US-AriaNeural"),
+        ("es", "es-ES-ElviraNeural"),
+        ("fr", "fr-FR-DeniseNeural"),
+        ("de", "de-DE-KatjaNeural"),
+        ("pt", "pt-BR-FranciscaNeural"),
+        ("ja", "ja-JP-NanamiNeural"),
+        ("zh", "zh-TW-HsiaoChenNeural"),
+    ]
+    p = edge.EdgeTTS()
+    for lang, expected_voice in cases:
+        p.synth("hi", lang)
+
+    assert [v for _, v in rec.instances] == [v for _, v in cases]
 
 
-def test_write_cache_creates_file(fresh, tmp_path):
-    from backend.blueprints import tts as tts_bp
-    target = tmp_path / "sub" / "x.mp3"
-    tts_bp._write_cache(str(target), b"data")
-    assert target.read_bytes() == b"data"
+# ---------- synth: error branches ----------
 
 
-def test_write_cache_oserror_swallowed(fresh, tmp_path):
-    """If the parent path is a file, makedirs fails; the helper logs and
-    returns without raising."""
-    from backend.blueprints import tts as tts_bp
-    blocker = tmp_path / "afile"
-    blocker.write_text("x")
-    tts_bp._write_cache(str(blocker / "x.mp3"), b"data")  # must not raise
+def test_synth_rejects_empty_text(fresh):
+    from backend.services.tts import edge
+    from backend.services.tts.base import TTSAudioError
+    p = edge.EdgeTTS()
+    with pytest.raises(TTSAudioError, match="empty"):
+        p.synth("", "en")
+    with pytest.raises(TTSAudioError, match="empty"):
+        p.synth("   ", "en")
 
 
-def test_write_cache_cleans_temp_on_replace_failure(fresh, tmp_path, monkeypatch):
-    """If os.replace fails, the temp file must be cleaned up. The outer
-    OSError handler swallows the exception (it only logs), so we assert the
-    temp file is gone and the target was not created."""
-    from backend.blueprints import tts as tts_bp
+def test_synth_rejects_unsupported_language(fresh):
+    from backend.services.tts import edge
+    from backend.services.tts.base import TTSAudioError
+    with pytest.raises(TTSAudioError, match="does not support"):
+        edge.EdgeTTS().synth("hi", "zz")
 
-    def bad_replace(src, dst):
-        raise OSError("replace failed")
 
-    monkeypatch.setattr(tts_bp.os, "replace", bad_replace)
-    target = tmp_path / "x.mp3"
-    tts_bp._write_cache(str(target), b"data")  # must not raise
-    # No leftover temp files, and the target was never created.
-    leftovers = [p for p in tmp_path.iterdir() if p.name.startswith(".tmp.")]
-    assert leftovers == []
-    assert not target.exists()
+def test_synth_rejects_empty_response(fresh, monkeypatch):
+    from backend.services.tts import edge
+    from backend.services.tts.base import TTSAudioError
+    _install_fake_edge_tts(monkeypatch, _FakeCommunicateEmpty)
+    with pytest.raises(TTSAudioError, match="empty body"):
+        edge.EdgeTTS().synth("hi", "en")
+
+
+def test_synth_rejects_non_audio_payload(fresh, monkeypatch):
+    from backend.services.tts import edge
+    from backend.services.tts.base import TTSAudioError
+    _install_fake_edge_tts(monkeypatch, _FakeCommunicateHtml)
+    with pytest.raises(TTSAudioError, match="non-audio payload"):
+        edge.EdgeTTS().synth("hi", "en")
+
+
+def test_synth_translates_underlying_exception(fresh, monkeypatch):
+    """A bug inside ``edge_tts.Communicate.save`` surfaces as a
+    ``TTSAudioError`` so the blueprint can return 502."""
+    from backend.services.tts import edge
+    from backend.services.tts.base import TTSAudioError
+    _install_fake_edge_tts(monkeypatch, _FakeCommunicateBoom)
+
+    with pytest.raises(TTSAudioError, match="edge-tts synth failed"):
+        edge.EdgeTTS().synth("hi", "en")
+
+
+# ---------- registry integration ----------
+
+
+def test_registry_bootstraps_edge_provider(fresh):
+    from backend.services.tts import registry
+    registry.bootstrap()
+    assert "edge" in registry.PROVIDERS
+    assert "google" in registry.PROVIDERS
+    by_name = {m["name"]: m for m in registry.available_detailed()}
+    assert by_name["edge"]["display_name"] == "Microsoft Edge"
+
+
+def test_registry_synth_dispatches_edge(fresh, monkeypatch):
+    """Calling ``registry.synth(..., 'edge')`` runs the edge provider
+    and returns MP3 with the provider's content type."""
+    from backend.services.tts import registry
+    _install_recorder(monkeypatch)
+
+    registry.bootstrap()
+    body, content_type = registry.synth("hi", "en", "edge")
+    assert body == _fake_mp3_bytes()
+    assert content_type == "audio/mpeg"

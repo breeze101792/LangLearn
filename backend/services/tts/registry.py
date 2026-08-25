@@ -19,6 +19,11 @@ PROVIDERS: dict[str, TTSProvider] = {}
 # Optional display metadata for the Settings UI.
 PROVIDER_META: dict[str, dict] = {}
 
+# Provider used when the user hasn't picked one. Keep Google as the
+# default for backward compatibility with existing single-user
+# installs — adding Edge shouldn't silently retarget new users.
+DEFAULT_PROVIDER_NAME: str = "google"
+
 
 def register(name: str, provider: TTSProvider, *,
              display_name: str, description: str = "") -> None:
@@ -49,17 +54,23 @@ def get(name: str | None) -> TTSProvider | None:
 
 
 def active(name: str | None) -> TTSProvider | None:
-    """Resolve the active provider: explicit name, else the first
-    registered, else None. Callers should treat None as 'no TTS available'."""
+    """Resolve the active provider: explicit name, else the configured
+    default, else the first registered alphabetically, else None.
+    Callers should treat None as 'no TTS available'."""
     if name and name in PROVIDERS:
         return PROVIDERS[name]
     if not PROVIDERS:
         return None
-    # First registered (alphabetical) as a safe default.
-    first = sorted(PROVIDERS.keys())[0]
+    # Explicit default beats alphabetical, so adding a new provider
+    # (e.g. 'edge') doesn't silently change the default for users who
+    # never picked one in Settings.
+    if DEFAULT_PROVIDER_NAME in PROVIDERS:
+        chosen = DEFAULT_PROVIDER_NAME
+    else:
+        chosen = sorted(PROVIDERS.keys())[0]
     if name and name not in PROVIDERS:
-        log.info("tts provider %r not registered; falling back to %r", name, first)
-    return PROVIDERS[first]
+        log.info("tts provider %r not registered; falling back to %r", name, chosen)
+    return PROVIDERS[chosen]
 
 
 def synth(text: str, lang: str, provider_name: str | None) -> tuple[bytes, str]:
@@ -82,7 +93,17 @@ def bootstrap() -> None:
     """Register built-in providers. Idempotent."""
     if PROVIDERS:
         return
+    from . import edge as edge_provider
     from . import google as google_provider
+    register(
+        "edge",
+        edge_provider.EdgeTTS(),
+        display_name="Microsoft Edge",
+        description=(
+            "Microsoft Edge read-aloud voices via the edge-tts package. "
+            "No API key. Higher-quality neural voices than Google."
+        ),
+    )
     register(
         "google",
         google_provider.GoogleTTS(),
