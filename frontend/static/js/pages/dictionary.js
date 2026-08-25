@@ -3,6 +3,12 @@
 // The switcher mirrors the user's chain order from Settings. LLM is always
 // present in every chain, so the user can fall back to AI when WordNet (or
 // any other provider) doesn't have the word.
+//
+// The chain mixes server-side providers (WordNet, LLM) with
+// client-side providers (Wiktionary). The chain walker in
+// ``chain-walker.js`` owns the dispatch: client-side steps run in
+// the browser, server-side steps go to the server with a
+// client-pruned chain.
 
 import { api } from "../api.js";
 import { cache } from "../cache.js";
@@ -15,12 +21,20 @@ import {
   switcherProvidersFor,
   cycleSwitcher,
 } from "../components/dict-card.js";
+import { runChain, runProvider } from "../chain-walker.js";
 
 // Metadata fetched from /api/dictionary/providers keyed by name.
 let providerMeta = {};
 let llmStatus = { configured: true, provider_kind: "openai-compat" };
 let providerMetaLoaded = false;
 let lastLang = null;
+
+// Map of provider name → true when the catalog marks it client-side.
+// Populated from the catalog endpoint on first chain run and
+// refreshed whenever the catalog changes (e.g. after install /
+// uninstall). Used by the chain walker to decide which steps run in
+// the browser.
+let clientSideMap = {};
 
 const lastLookup = { word: "", lang: "", source: "" };
 // Monotonic token so a slow in-flight response can't clobber the result of a
@@ -197,6 +211,7 @@ async function loadProviderMeta(lang) {
   providerMeta = {};
   for (const p of res.data.providers || []) {
     providerMeta[p.name] = p;
+    if (p.client_side === true) clientSideMap[p.name] = true;
   }
   llmStatus = {
     configured: res.data.llm_configured !== false,
@@ -205,6 +220,24 @@ async function loadProviderMeta(lang) {
   providerMetaLoaded = true;
   maybeShowLLMBanner();
   return providerMeta;
+}
+
+/**
+ * Build the client-side provider map from the already-loaded
+ * ``providerMeta``. The providers endpoint now includes a
+ * ``client_side`` flag for each entry, so we don't need a separate
+ * catalog fetch. Falls back to an empty map when the metadata is
+ * missing (the chain walker will treat every step as server-side,
+ * which matches the old behavior).
+ */
+function buildClientSideMap() {
+  clientSideMap = {};
+  for (const name of Object.keys(providerMeta || {})) {
+    if (providerMeta[name] && providerMeta[name].client_side === true) {
+      clientSideMap[name] = true;
+    }
+  }
+  return clientSideMap;
 }
 
 function maybeShowLLMBanner() {
@@ -322,11 +355,30 @@ function renderEmptyState(host) {
   `;
 }
 
+// Compose the in-flight message for a lookup. The wording matches
+// what the user actually sees on the wire: a brand-new word on
+// Wiktionary triggers a browser-side fetch, so the spinner says
+// "Checking Wiktionary for 'X'…" instead of the generic
+// "Looking up…". WordNet lookups are local; LLM lookups are
+// generated. We avoid the word "download" because Wiktionary is
+// browser-side, not a bundled dictionary the user is downloading.
+function loadingMessageFor(word, lang) {
+  const safeWord = escapeHtml(word);
+  const wikInfo = providerMeta && providerMeta.wiktionary;
+  const wikInstalled = wikInfo && wikInfo.installed === true
+                       && wikInfo.supports === true;
+  if (wikInstalled) {
+    return `Checking Wiktionary for "${safeWord}"…`;
+  }
+  return `Looking up "${safeWord}"…`;
+}
+
 // Show a loading indicator while a lookup is in flight. The source-switch
 // bar (the first line of the result card) is kept so the user can still
 // see and switch providers; only the dictionary content below it is
 // replaced with the spinner.
-function showLoading(host, word) {
+function showLoading(host, word, message) {
+  const text = message || `Looking up "${escapeHtml(word)}"…`;
   const existing = host.querySelector(".word-card");
   if (existing) {
     const bar = existing.querySelector(".result-provider-switcher");
@@ -339,7 +391,7 @@ function showLoading(host, word) {
     loading.style.cssText = "gap: var(--sp-3); align-items: center";
     loading.innerHTML = `
       <span class="spinner"></span>
-      <span>Looking up "${escapeHtml(word)}"…</span>
+      <span>${text}</span>
     `;
     existing.appendChild(loading);
     return;
@@ -348,7 +400,7 @@ function showLoading(host, word) {
     <div class="card">
       <div class="row" style="gap: var(--sp-3); align-items: center">
         <span class="spinner"></span>
-        <span>Looking up "${escapeHtml(word)}"…</span>
+        <span>${text}</span>
       </div>
     </div>
   `;
@@ -430,30 +482,36 @@ async function doLookup(word, lang, providerOverride) {
     return;
   }
 
-  // No cache hit — show the loading state and hit the server.
-  showLoading(resultHost, word);
+  // No cache hit — show the loading state and run the chain.
+  showLoading(resultHost, word, loadingMessageFor(word, lang));
 
   lastLookup.word = word;
   lastLookup.lang = lang;
   lastLookup.source = providerOverride || "";
-
-  // 2) server chain (or override)
-  const body = { lang, word };
-  if (providerOverride) body.provider = providerOverride;
   skipNextCache = false;
-  const res = await api.post("/api/dictionary/lookup", body);
-  if (myToken !== lookupToken) return; // a newer search started meanwhile
-  if (!res.ok) {
-    resultHost.innerHTML = `
-      <div class="card" style="border-left: 4px solid var(--danger)">
-        <strong>Couldn't look up "${escapeHtml(word)}"</strong>
-        <p class="field__hint">${escapeHtml(res.error || "unknown error")}</p>
-      </div>`;
-    return;
+
+  // 2) chain walk. ``runChain`` is provider-agnostic: client-side
+  // steps run in the browser, server-side steps go to the server
+  // with a client-pruned chain. The ``clientSideMap`` is built from
+  // ``providerMeta``, which the providers endpoint populated with a
+  // ``client_side`` flag per provider. Falls back to an empty map
+  // when the metadata is missing — every step runs server-side,
+  // matching the pre-client-side behavior.
+  if (Object.keys(clientSideMap).length === 0) {
+    buildClientSideMap();
   }
-  const data = res.data || {};
-  if (!data.entry || !data.entry.senses || data.entry.senses.length === 0) {
-    renderNoResult(resultHost, word, lang, data.suggestions || [], data.provider_errors || []);
+
+  const settings = store.get().settings || {};
+  const userChain = (settings.dict_chain_json || {})[lang] || [];
+
+  const data = providerOverride
+    ? await runProvider({ word, lang, providerName: providerOverride, api, clientSideMap })
+    : await runChain({ word, lang, chain: userChain, api, clientSideMap });
+
+  if (myToken !== lookupToken) return; // a newer search started meanwhile
+
+  if (!data || !data.entry || !data.entry.senses || data.entry.senses.length === 0) {
+    renderNoResult(resultHost, word, lang, data?.suggestions || [], data?.provider_errors || []);
     return;
   }
   renderEntry(resultHost, data.entry, data.source, word, lang, {
@@ -461,13 +519,18 @@ async function doLookup(word, lang, providerOverride) {
     leitnerBox: data.leitner_box ?? null,
   });
   lastLookup.source = data.source || "";
-  cache.set(lang, word, data.source, {
-    entry: data.entry,
-    word,
-    autoAdded: !!data.auto_added,
-    inVocab: data.in_vocab === true,
-    leitnerBox: data.leitner_box ?? null,
-  });
+  // The cache layer uses the source as the key, so a client-side
+  // Wiktionary hit lands under source="wiktionary" and a
+  // server-side hit under "wordnet" or "llm". They don't collide.
+  if (data.source) {
+    cache.set(lang, word, data.source, {
+      entry: data.entry,
+      word,
+      autoAdded: !!data.auto_added,
+      inVocab: data.in_vocab === true,
+      leitnerBox: data.leitner_box ?? null,
+    });
+  }
   maybeShowUndoToast(word, lang, data.auto_added);
 }
 

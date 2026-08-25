@@ -326,75 +326,165 @@ body.nav-drawer-open { overflow: hidden; }
 /* Word card (dictionary sense card) */
 .word-card { padding: var(--sp-5); }
 .word-card__head {
-  display: flex; align-items: baseline; gap: var(--sp-3); flex-wrap: wrap;
-  padding-bottom: var(--sp-3); margin-bottom: var(--sp-4);
+  display: flex; flex-direction: column; gap: var(--sp-2);
+  padding-bottom: var(--sp-4); margin-bottom: var(--sp-5);
   border-bottom: 1px solid var(--border);
 }
-.word-card__headword { font-size: 22px; font-weight: 600; margin: 0; }
+.word-card__headline {
+  display: flex; align-items: center; gap: var(--sp-3);
+}
+.word-card__headword {
+  font-size: 28px; font-weight: 700;
+  margin: 0; line-height: 1.2;
+  color: var(--text-primary);
+  letter-spacing: -0.01em;
+}
 .word-card__speak {
   display: inline-flex; align-items: center; justify-content: center;
-  width: 30px; height: 30px;
+  width: 34px; height: 34px;
   padding: 0;
   background: var(--surface-sunken);
   color: var(--text-primary);
   border: 1px solid var(--border);
   border-radius: 50%;
-  font-size: 14px;
+  font-size: 15px;
   line-height: 1;
   cursor: pointer;
   transition: background 120ms, transform 120ms;
+  flex-shrink: 0;
 }
 .word-card__speak:hover { background: var(--accent-soft); }
 .word-card__speak:active { transform: scale(0.94); }
 .word-card__speak[disabled] { opacity: 0.6; cursor: progress; }
 .word-card__speak--busy { background: var(--accent-soft); }
-.word-card__reading { font-size: 14px; color: var(--text-secondary); }
-.word-card__pos {
-  font-size: 12px; font-weight: 600; padding: 2px var(--sp-2);
+.word-card__meta {
+  display: flex; align-items: center; gap: var(--sp-2);
+}
+.word-card__source-badge {
+  display: inline-flex; align-items: center;
+  font-size: 12px; font-weight: 600;
+  padding: 3px var(--sp-2);
+  border-radius: var(--r-sm);
+  letter-spacing: 0.02em;
+}
+.word-card__source-badge--wordnet {
   background: var(--accent-soft); color: var(--accent-text);
-  border-radius: var(--r-sm); text-transform: lowercase;
 }
-.word-card__source { margin-left: auto; }
-.word-card__senses { display: flex; flex-direction: column; gap: var(--sp-4); }
-.word-card__sense {
-  padding-left: var(--sp-4);
-  border-left: 3px solid var(--accent);
+.word-card__source-badge--wiktionary {
+  background: var(--success-soft); color: var(--success);
 }
-.word-card__sense__gloss {
-  color: var(--text-primary);
-  display: flex; align-items: baseline; gap: var(--sp-2);
-  flex-wrap: wrap;
+.word-card__source-badge--llm {
+  background: var(--ai-soft); color: var(--ai);
 }
-.word-card__sense__pos-line {
-  display: flex; align-items: baseline; gap: var(--sp-2);
-  margin-bottom: var(--sp-1);
+.word-card__source-badge--default {
+  background: var(--surface-sunken); color: var(--text-secondary);
 }
-.word-card__sense__example {
-  margin-top: var(--sp-2);
-  padding: var(--sp-2) var(--sp-3);
+.word-card__lang {
+  font-size: 12px;
+  font-family: var(--font-mono);
+  padding: 3px var(--sp-2);
+  border-radius: var(--r-sm);
   background: var(--surface-sunken);
-  border-radius: var(--r-md);
-  color: var(--text-primary);
-  font-size: 14px;
+  color: var(--text-secondary);
 }
-.word-card__sense__example .ll-tag {
-  display: inline-block;
-  font-size: 11px;
-  font-weight: 600;
-  padding: 0 var(--sp-1);
+.word-card__actions {
+  display: flex; gap: var(--sp-2);
+  margin-top: var(--sp-2);
+}
+.word-card__senses {
+  display: flex; flex-direction: column;
+  gap: var(--sp-6);
+}
+.word-card__pos-group {
+  display: flex; flex-direction: column;
+  gap: var(--sp-3);
+}
+.word-card__pos-heading {
+  margin: 0;
+  display: flex; align-items: center; gap: var(--sp-3);
+}
+.word-card__pos-heading::after {
+  content: "";
+  flex: 1;
+  height: 1px;
   background: var(--border);
+}
+.word-card__pos-tag {
+  font-size: 11px; font-weight: 700;
+  padding: 4px var(--sp-2);
+  background: var(--surface-sunken);
   color: var(--text-secondary);
   border-radius: var(--r-sm);
-  margin-right: var(--sp-1);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+.word-card__defs {
+  list-style: none;
+  margin: 0; padding: 0;
+  display: flex; flex-direction: column;
+  gap: var(--sp-3);
+}
+.word-card__def {
+  display: grid;
+  grid-template-columns: 28px 1fr;
+  gap: var(--sp-3);
+  padding: var(--sp-3) 0;
+}
+.word-card__def + .word-card__def {
+  border-top: 1px dashed var(--border);
+}
+.word-card__def__num {
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  color: var(--accent);
+  font-size: 14px;
+  line-height: 1.5;
+  text-align: right;
+}
+.word-card__def__body {
+  display: flex; flex-direction: column;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+.word-card__def__gloss {
+  margin: 0;
+  font-size: 16px;
+  line-height: 1.55;
+  color: var(--text-primary);
+}
+.word-card__example {
+  margin: 0;
+  padding: var(--sp-2) var(--sp-3);
+  border-left: 3px solid var(--accent);
+  background: var(--surface-sunken);
+  border-radius: 0 var(--r-md) var(--r-md) 0;
+  font-style: italic;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--text-secondary);
 }
 .word-card__sense__expl {
-  margin-top: var(--sp-2); display: flex; flex-direction: column; gap: var(--sp-1);
+  display: flex; flex-direction: column;
+  gap: var(--sp-1);
+  margin-top: var(--sp-1);
 }
 .word-card__sense__expl .expl-line {
-  font-size: 14px;
+  font-size: 13px;
   display: flex; align-items: baseline; gap: var(--sp-2);
+  color: var(--text-secondary);
 }
-.word-card__sense__expl .ll-tag { flex-shrink: 0; }
+.word-card__sense__expl .ll-tag {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px var(--sp-1);
+  background: var(--surface-sunken);
+  color: var(--text-secondary);
+  border-radius: var(--r-sm);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  flex-shrink: 0;
+}
 
 /* Lang switcher */
 .lang-switcher { position: relative; }
@@ -616,6 +706,15 @@ body.nav-drawer-open { overflow: hidden; }
   margin: 0 0 var(--sp-3) 0;
   padding-bottom: var(--sp-3);
   border-bottom: 1px solid var(--border);
+}
+/* When the switcher is followed by the word-card head, its own
+   border would double up with the head's. Drop one. */
+.result-provider-switcher + .word-card__head {
+  margin-top: 0;
+}
+.word-card > .result-provider-switcher + .word-card__head {
+  border-top: none;
+  padding-top: var(--sp-3);
 }
 .result-provider-switcher__label {
   font-size: 13px;

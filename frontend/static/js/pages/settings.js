@@ -9,6 +9,14 @@ import { renderTransfer } from "./transfer.js";
 let activeSection = "general";
 let dirty = {};
 let ttsProviders = [];  // populated from /api/tts/providers
+// Populated when the "Dictionary chain" section is opened. Two views:
+//   dictProviders: the unfiltered list, used for display name + kind.
+//   dictProvidersByLang: per-language entries carrying `supports` and
+//     `installed` so the "Add provider" dropdown can filter correctly
+//     for each language. Adding a new provider on the backend shows up
+//     here automatically — no UI code change needed.
+let dictProviders = [];
+let dictProvidersByLang = {};
 
 async function loadTtsProviders() {
   const res = await api.get("/api/tts/providers");
@@ -245,7 +253,7 @@ export function renderSettings(host) {
     main.innerHTML = `
       <div class="settings__section">
         <h2 class="card__title">Offline dictionaries</h2>
-        <p class="field__hint">Bundled dictionaries run on this device with no network. WordNet for English is installed automatically; everything else you install here on demand.</p>
+        <p class="field__hint">Some dictionaries ship with the app (offline); others run as a service the browser calls. The badge under each name tells you which. WordNet for English is enabled automatically; everything else you enable here on demand.</p>
         <div class="list" id="dict-list" aria-busy="true">
           <div class="field__hint">Loading…</div>
         </div>
@@ -272,6 +280,21 @@ export function renderSettings(host) {
     const langLabels = (entry.languages || []).map((c) => langByCode[c] || c);
     const installedLangs = new Set(entry.installed_languages || []);
     const isProtected = entry.auto_install && installedLangs.size > 0;
+    // Wording differs between server-side and client-side entries:
+    // client-side dictionaries are "Enabled" (the user is opting
+    // the browser into a network call), server-side ones are
+    // "Installed" (a marker row for a bundled dataset). Same row in
+    // the DB, but the action vocabulary reflects the architecture.
+    const isClientSide = entry.client_side === true;
+    const actionVerb = isClientSide ? "Enable" : "Install";
+    const pastVerb = isClientSide ? "Enabled" : "Installed";
+    const notYetVerb = isClientSide ? "Not enabled" : "Not installed";
+    const removeVerb = isClientSide ? "Disable" : "Uninstall";
+    const sourceBadge = entry.source === "online"
+      ? `<span class="badge badge--info">Online${isClientSide ? " (browser)" : ""}</span>`
+      : (entry.source === "bundled"
+        ? `<span class="badge badge--builtin">Offline</span>`
+        : "");
     // ``data-langs`` carries the covered language codes so the click
     // handler knows which pair to (un)install. Catalog entries today
     // cover exactly one language; future multi-language entries will
@@ -286,19 +309,19 @@ export function renderSettings(host) {
             <div class="field__hint" style="margin-top: var(--sp-1)">
               Languages: ${langLabels.map(escapeHtml).join(", ") || "—"}
               ${entry.size_hint ? ` · ${escapeHtml(entry.size_hint)}` : ""}
-              ${entry.source ? ` · ${escapeHtml(entry.source)}` : ""}
             </div>
           </div>
           <div class="list-item__badges">
+            ${sourceBadge}
             ${isProtected ? `<span class="badge badge--builtin">Always on</span>` : ""}
-            ${installedLangs.size > 0 ? `<span class="badge badge--ok">Installed</span>` : `<span class="badge badge--muted">Not installed</span>`}
+            ${installedLangs.size > 0 ? `<span class="badge badge--ok">${pastVerb}</span>` : `<span class="badge badge--muted">${notYetVerb}</span>`}
           </div>
           <div class="spacer"></div>
           ${installedLangs.size > 0
             ? (isProtected
                 ? `<span class="field__hint">Default for ${langLabels.map(escapeHtml).join(", ")}</span>`
-                : `<button class="btn btn--ghost" data-action="uninstall">Uninstall</button>`)
-            : `<button class="btn btn--primary" data-action="install">Install</button>`}
+                : `<button class="btn btn--ghost" data-action="uninstall">${removeVerb}</button>`)
+            : `<button class="btn btn--primary" data-action="install">${actionVerb}</button>`}
         </div>
       </div>
     `;
@@ -313,14 +336,30 @@ export function renderSettings(host) {
         const language = langs[0] || "en";
         btn.disabled = true;
         const orig = btn.textContent;
-        btn.innerHTML = `<span class="spinner spinner--sm" aria-hidden="true"></span> Installing…`;
+        // The install endpoint is now a pure marker row — no
+        // download happens server-side. Show a brief "Enabling…"
+        // state so the user knows the click was received and the
+        // UI is updating.
+        const inFlightLabel = /Enable/i.test(orig) ? "Enabling…" : "Installing…";
+        btn.innerHTML = `<span class="spinner spinner--sm" aria-hidden="true"></span> ${inFlightLabel}`;
         try {
           const res = await api.post("/api/dictionary/install", { provider, language });
           if (!res.ok) {
-            toast({ title: "Install failed", message: res.error, variant: "error" });
+            toast({ title: `${orig} failed`, message: res.error, variant: "error" });
             return;
           }
-          toast({ title: `${provider} installed`, message: res.data.already ? "Already installed" : "Ready to use", variant: "success", ttl: 2500 });
+          const data = res.data || {};
+          const pastVerb = /Enable/i.test(orig) ? "Enabled" : "Installed";
+          const alreadyVerb = /Enable/i.test(orig) ? "Already enabled" : "Already installed";
+          const detail = data.client_side
+            ? "Lookups will fetch from your browser when you search for a word."
+            : "Ready to use.";
+          toast({
+            title: `${provider} ${data.already ? alreadyVerb.toLowerCase() : pastVerb.toLowerCase()}`,
+            message: data.already ? alreadyVerb : detail,
+            variant: "success",
+            ttl: 2500,
+          });
           await refreshAfterInstall(host);
         } finally {
           if (document.body.contains(item)) {
@@ -336,7 +375,8 @@ export function renderSettings(host) {
         const provider = item.dataset.provider;
         const langs = (item.dataset.langs || "").split(",").filter(Boolean);
         const language = langs[0] || "en";
-        if (!confirm(`Uninstall ${provider}? Word lookups for ${language} will fall back to the AI.`)) return;
+        const action = /Disable/.test(btn.textContent) ? "Disable" : "Uninstall";
+        if (!confirm(`${action} ${provider}? Word lookups for ${language} will fall through to the next provider in your chain.`)) return;
         btn.disabled = true;
         try {
           const res = await api.post("/api/dictionary/uninstall", { provider, language });
@@ -406,29 +446,59 @@ export function renderSettings(host) {
     });
   }
 
-  function renderDictChain(main) {
+  async function renderDictChain(main) {
     const chain = settings.dict_chain_json || {};
+    // Render the skeleton first; the per-language "Add provider"
+    // dropdown depends on the providers endpoint and we don't want to
+    // block the layout on it. The skeleton shows a loading hint and is
+    // repopulated when the fetches resolve.
     main.innerHTML = `
       <div class="settings__section">
         <h2 class="card__title">Dictionary chain</h2>
         <p class="field__hint">For each language, providers are tried top-to-bottom. The first that returns a result wins.</p>
-        ${selectableLanguages.map((l) => {
-          const entries = chain[l.code] || [];
-          return `
-            <div class="chain__lang" data-lang="${escapeHtml(l.code)}">
-              <div class="chain__lang__head">
-                <strong>${escapeHtml(l.display_name)}</strong>
-                <span class="field__hint">${entries.length} provider${entries.length === 1 ? "" : "s"}</span>
-              </div>
-              <div class="chain__rows" data-role="rows">
-                ${entries.map((e, idx) => renderChainRow(l.code, e, idx, entries.length)).join("")}
-              </div>
-              ${renderAddProvider(l.code, entries)}
-            </div>
-          `;
-        }).join("")}
+        <div id="chain-langs" aria-busy="true">
+          <div class="field__hint">Loading…</div>
+        </div>
       </div>
     `;
+    const container = main.querySelector("#chain-langs");
+    // Unfiltered list gives us display name + kind for any provider
+    // currently in the chain (so existing chain rows get a friendly
+    // label even if their per-language fetch hasn't returned yet).
+    const allRes = await api.get("/api/dictionary/providers");
+    if (allRes && allRes.ok && Array.isArray(allRes.data?.providers)) {
+      dictProviders = allRes.data.providers;
+    } else {
+      dictProviders = [];
+    }
+    // Per-language fetches populate `supports` and `installed` for the
+    // "Add provider" dropdown. Done in parallel; each failure falls
+    // back to an empty list so the chain still renders.
+    dictProvidersByLang = {};
+    await Promise.all(selectableLanguages.map(async (l) => {
+      const r = await api.get(`/api/dictionary/providers?lang=${encodeURIComponent(l.code)}`);
+      if (r && r.ok && Array.isArray(r.data?.providers)) {
+        dictProvidersByLang[l.code] = r.data.providers;
+      } else {
+        dictProvidersByLang[l.code] = [];
+      }
+    }));
+    container.removeAttribute("aria-busy");
+    container.innerHTML = selectableLanguages.map((l) => {
+      const entries = chain[l.code] || [];
+      return `
+        <div class="chain__lang" data-lang="${escapeHtml(l.code)}">
+          <div class="chain__lang__head">
+            <strong>${escapeHtml(l.display_name)}</strong>
+            <span class="field__hint">${entries.length} provider${entries.length === 1 ? "" : "s"}</span>
+          </div>
+          <div class="chain__rows" data-role="rows">
+            ${entries.map((e, idx) => renderChainRow(l.code, e, idx, entries.length)).join("")}
+          </div>
+          ${renderAddProvider(l.code, entries)}
+        </div>
+      `;
+    }).join("");
     bindDictChain(main);
   }
 
@@ -444,7 +514,7 @@ export function renderSettings(host) {
     return `
       <div class="chain__row${pinned ? " chain__row--pinned" : ""}" data-idx="${idx}" data-name="${escapeHtml(entry.name)}">
         <span class="chain__handle" title="Reorder">�</span>
-        <span class="${chipCls}">${escapeHtml(entry.name)}</span>
+        <span class="${chipCls}">${escapeHtml(providerDisplayName(entry.name))}</span>
         <span class="field__hint chain__row__kind">${escapeHtml(providerKindLabel(entry.name))}</span>
         ${pinned ? `<span class="field__hint chain__row__pinned-tag">always on</span>` : ""}
         <div class="spacer"></div>
@@ -460,14 +530,30 @@ export function renderSettings(host) {
   }
 
   function renderAddProvider(lang, entries) {
-    const available = ["wordnet", "llm"].filter((n) => !entries.some((e) => e.name === n));
+    // Build the "Add provider" list from the per-language providers
+    // fetch. We surface only providers that:
+    //   - support this language
+    //   - are installed for this language (or are the LLM, which the
+    //     server always treats as installed)
+    //   - aren't already in the user's chain
+    // This makes the section self-driving: adding a new provider on
+    // the backend shows up here without UI changes.
+    const inChain = new Set(entries.map((e) => e.name));
+    const pool = dictProvidersByLang[lang] || [];
+    const available = pool.filter((p) => {
+      if (!p || typeof p.name !== "string") return false;
+      if (inChain.has(p.name)) return false;
+      if (p.name === "llm") return true;
+      if (p.supports === false) return false;
+      return p.installed === true;
+    });
     if (!available.length) {
-      return `<p class="field__hint" style="margin-top: var(--sp-2)">All providers already in chain.</p>`;
+      return `<p class="field__hint" style="margin-top: var(--sp-2)">No additional providers available. Install one from the Offline dictionaries section to add it here.</p>`;
     }
     return `
       <div class="chain__add">
-        <select class="select" data-role="add-select" style="max-width: 200px">
-          ${available.map((n) => `<option value="${escapeHtml(n)}">${escapeHtml(providerDisplayName(n))}</option>`).join("")}
+        <select class="select" data-role="add-select" style="max-width: 240px">
+          ${available.map((p) => `<option value="${escapeHtml(p.name)}">${escapeHtml(p.display_name || p.name)}</option>`).join("")}
         </select>
         <button class="btn btn--sm btn--ghost" data-action="add">Add provider</button>
       </div>
@@ -475,14 +561,19 @@ export function renderSettings(host) {
   }
 
   function providerDisplayName(name) {
-    if (name === "llm") return "AI";
-    if (name === "wordnet") return "WordNet";
-    return name;
+    const p = (dictProviders || []).find((x) => x && x.name === name);
+    return (p && p.display_name) || name;
   }
 
   function providerKindLabel(name) {
-    if (name === "llm") return "AI (any language)";
-    if (name === "wordnet") return "English only";
+    const p = (dictProviders || []).find((x) => x && x.name === name);
+    if (!p) return "";
+    if (p.kind === "ai") return "AI (any language)";
+    if (p.kind === "builtin") {
+      // Surface language coverage from the catalog when known; fall
+      // back to a generic "offline" tag for providers we don't know.
+      return "Offline";
+    }
     return "";
   }
 

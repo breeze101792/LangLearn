@@ -36,13 +36,31 @@ def test_catalog_unknown_provider_returns_none():
     assert catalog.find("freedict-de-en", "en") is None
 
 
-def test_catalog_no_offline_for_other_languages_today():
-    """Today only WordNet/English ships; other languages have no offline
-    catalog entries. This test pins that invariant so a future contributor
-    adding a new dictionary is forced to update the catalog."""
+def test_catalog_pins_server_side_vs_client_side():
+    """Pin the architecture split:
+
+    - WordNet is server-side (client_side=False) and the only entry
+      marked ``auto_install=True`` so a fresh install gets a usable
+      English dictionary without a network.
+    - Wiktionary is per-language, client-side, and never
+      auto-installed (the user opts in per language).
+    - LLM is *not* in the catalog: it has no install row and is
+      always available; the chain executor always tries it.
+    """
     from backend.services.dictionaries import catalog
-    for lang in ("es", "ja", "fr", "de", "zh", "pt"):
-        assert catalog.providers_for_language(lang) == [], lang
+    wordnet = next(e for e in catalog.CATALOG if e.provider == "wordnet")
+    assert wordnet.client_side is False
+    assert wordnet.auto_install is True
+    assert wordnet.languages == ("en",)
+
+    wik = [e for e in catalog.CATALOG if e.provider == "wiktionary"]
+    assert len(wik) >= 1
+    for entry in wik:
+        assert entry.client_side is True
+        assert entry.auto_install is False
+        assert len(entry.languages) == 1
+
+    assert not any(e.provider == "llm" for e in catalog.CATALOG)
 
 
 # ---------- installer --------------------------------------------------------

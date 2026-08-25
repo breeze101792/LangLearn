@@ -25,6 +25,7 @@ def lookup():
     lang = body.get("lang")
     word = body.get("word")
     provider_override = body.get("provider")
+    client_chain = body.get("chain")
     if not isinstance(lang, str) or not is_valid_lang(lang):
         return jsonify(err("invalid language", code="invalid_lang")), 400
     if not isinstance(word, str) or not is_word(word):
@@ -33,7 +34,15 @@ def lookup():
     if not word:
         return jsonify(err("word must be 1-200 chars of letters", code="invalid_word")), 400
     settings = settings_svc.get_settings(config.DEFAULT_USER_ID)
-    chain = settings["dict_chain_json"].get(lang, []) if isinstance(settings["dict_chain_json"], dict) else []
+    # The chain the client asks the server to run. When the client
+    # walks the chain itself (Wiktionary is browser-side, so the
+    # client tries it first and only falls through here on miss), it
+    # sends a client-pruned chain containing only server-side
+    # providers. Otherwise we use the user's stored chain.
+    if isinstance(client_chain, list):
+        chain = client_chain
+    else:
+        chain = settings["dict_chain_json"].get(lang, []) if isinstance(settings["dict_chain_json"], dict) else []
     level = settings_svc.get_language_level(lang, config.DEFAULT_USER_ID)
 
     used_provider: str | None = None
@@ -150,18 +159,54 @@ def force_provider(provider: str):
 
 @bp.get("/providers")
 def providers():
-    """List registered providers with display metadata and, when `lang` is
-    passed as a query parameter, which ones support that language and
-    are currently installed for it."""
+    """List providers with display metadata and, when `lang` is passed
+    as a query parameter, which ones support that language and are
+    currently installed for it.
+
+    Server-side providers come from the chain registry (WordNet, LLM).
+    Client-side providers (Wiktionary) come from the catalog: they're
+    not registered in the chain executor but the dictionary page needs
+    to know they exist and are installed so the chain walker can
+    dispatch them in the browser.
+    """
     lang = request.args.get("lang")
     if lang is not None and (not isinstance(lang, str) or not is_valid_lang(lang)):
         return jsonify(err("invalid language", code="invalid_lang")), 400
     items = registry.available_providers_detailed()
+    # Augment with client-side catalog entries that the registry
+    # doesn't know about, so the UI sees a unified list.
+    catalog_items = dict_installer.catalog_view(lang)
+    catalog_by_name: dict[str, dict] = {e["provider"]: e for e in catalog_items}
+    for entry in catalog_items:
+        if entry.get("client_side") is not True:
+            continue
+        if any(i["name"] == entry["provider"] for i in items):
+            continue
+        items.append({
+            "name": entry["provider"],
+            "display_name": entry["display_name"],
+            "description": entry["description"],
+            "kind": "online",
+            "client_side": True,
+        })
     if lang is not None:
         installed = registry.installed_providers_for(lang)
         for item in items:
-            item["supports"] = registry.supports_provider(item["name"], lang)
-            item["installed"] = item["name"] in installed
+            name = item.get("name")
+            if not isinstance(name, str):
+                continue
+            catalog_entry = catalog_by_name.get(name, {})
+            if name == "llm":
+                # LLM is always considered installed — it has no
+                # install row, the user just needs the env vars.
+                item["installed"] = True
+                item["supports"] = True
+                continue
+            if item.get("client_side"):
+                item["supports"] = lang in catalog_entry.get("languages", [])
+            else:
+                item["supports"] = registry.supports_provider(name, lang)
+            item["installed"] = name in installed
     llm_ready, llm_kind = _llm_status()
     for item in items:
         if item.get("name") == "llm":
@@ -214,7 +259,7 @@ def install_dictionary():
         "language": result.language,
         "installed": result.installed,
         "already": result.already,
-        "source": result.source,
+        "client_side": result.client_side,
     })
 
 

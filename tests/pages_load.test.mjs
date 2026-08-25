@@ -70,6 +70,16 @@ if (!window.matchMedia) {
 }
 globalThis.matchMedia = window.matchMedia;
 console.log("DEBUG matchMedia stub installed:", typeof window.matchMedia);
+// JSDOM doesn't ship requestAnimationFrame. The toast component uses
+// it to drive the dismiss-progress bar; without the polyfill, a
+// warning toast (which the new install-feedback regression depends
+// on) throws on call.
+if (typeof window.requestAnimationFrame !== "function") {
+  window.requestAnimationFrame = (cb) => setTimeout(() => cb(Date.now()), 16);
+  window.cancelAnimationFrame = (id) => clearTimeout(id);
+}
+globalThis.requestAnimationFrame = window.requestAnimationFrame;
+globalThis.cancelAnimationFrame = window.cancelAnimationFrame;
 // Stub fetch so the page render's async load() doesn't hit the
 // network. Pages fall back to an error state when the response is not
 // ok, which is fine for the smoke test.
@@ -212,8 +222,16 @@ await testAsync("REGRESSION: pendingDictionaryWord wins over restored searchInpu
     lastLookup: { word: "apple", lang: "en", source: "wordnet" },
   });
 
-  // Seed the right-click handoff for the new word "banana".
-  stateMod.store.set({ pendingDictionaryWord: "banana" });
+  // Seed the right-click handoff for the new word "banana". The
+  // chain walker needs at least one server-side provider in the
+  // chain so the lookup reaches /api/dictionary/lookup.
+  stateMod.store.set({
+    pendingDictionaryWord: "banana",
+    settings: {
+      active_language: "en",
+      dict_chain_json: { en: [{ name: "llm", enabled: true }] },
+    },
+  });
 
   // Stub fetch to count calls and remember the word each one asked
   // for. The body is JSON-encoded by api.post.
@@ -449,9 +467,9 @@ await testAsync("REGRESSION: settings Offline dictionaries section renders catal
           installed_languages: ["en"],
         },
         {
-          provider: "freedict-en-es",
-          display_name: "FreeDict EN-ES",
-          description: "Bidirectional English-Spanish dictionary.",
+          provider: "future-dict",
+          display_name: "Future Dict",
+          description: "A not-yet-released offline dictionary.",
           languages: ["en", "es"],
           auto_install: false,
           source: "download",
@@ -518,11 +536,310 @@ await testAsync("REGRESSION: settings Offline dictionaries section renders catal
   assert(!wnItem.querySelector("[data-action='uninstall']"), "auto-installed wordnet should not show Uninstall button");
   assert(wnItem.querySelector(".badge--builtin"), "expected 'Always on' badge on auto-installed entry");
 
-  const futureItem = list.querySelector('[data-provider="freedict-en-es"]');
-  assert(futureItem, "freedict-en-es entry missing");
-  assert(futureItem.dataset.langs === "en,es", `freedict langs: ${futureItem.dataset.langs}`);
+  const futureItem = list.querySelector('[data-provider="future-dict"]');
+  assert(futureItem, "future-dict entry missing");
+  assert(futureItem.dataset.langs === "en,es", `future-dict langs: ${futureItem.dataset.langs}`);
   const installBtn = futureItem.querySelector("[data-action='install']");
   assert(installBtn, "Install button missing for not-installed entry");
+});
+
+// 9) REGRESSION: "Dictionary chain" must drive its "Add provider"
+//    dropdown from the providers endpoint, not a hard-coded list. With
+//    only WordNet (en) and LLM registered, the dropdown for Spanish
+//    (where WordNet doesn't apply) should still surface LLM, and
+//    should not surface WordNet.
+await testAsync("REGRESSION: chain section Add dropdown is API-driven, not hard-coded", async () => {
+  const settingsMod = await importFresh("../frontend/static/js/pages/settings.js");
+  const stateMod = await import("../frontend/static/js/state.js");
+
+  stateMod.store.set({
+    settings: {
+      active_language: "es",
+      dict_chain_json: { es: [] },
+    },
+    languages: [{ code: "es", display_name: "Spanish", seeded: true }],
+  });
+
+  // Stub the providers endpoint. Chain section fetches unfiltered and
+  // per-language in parallel. The per-language flags determine what
+  // ends up in the Add dropdown.
+  const providersAll = {
+    ok: true,
+    data: {
+      providers: [
+        { name: "wordnet", display_name: "WordNet", kind: "builtin" },
+        { name: "llm", display_name: "AI", kind: "ai" },
+      ],
+    },
+  };
+  const providersEs = {
+    ok: true,
+    data: {
+      providers: [
+        { name: "wordnet", display_name: "WordNet", kind: "builtin", supports: false, installed: false },
+        { name: "llm", display_name: "AI", kind: "ai", supports: true, installed: true },
+      ],
+    },
+  };
+  globalThis.fetch = async (url) => {
+    const u = String(url);
+    if (u.includes("/api/dictionary/providers?lang=es")) {
+      return { ok: true, status: 200, json: async () => providersEs };
+    }
+    if (u.includes("/api/dictionary/providers")) {
+      return { ok: true, status: 200, json: async () => providersAll };
+    }
+    if (u.includes("/api/tts/providers")) {
+      return { ok: true, status: 200, json: async () => ({ ok: true, data: { providers: [] } }) };
+    }
+    return { ok: false, status: 404, json: async () => ({ ok: false }) };
+  };
+
+  for (let i = 0; i < 20; i++) {
+    await new Promise((r) => setTimeout(r, 0));
+  }
+
+  const host = window.document.getElementById("app-main");
+  host.innerHTML = "";
+  await settingsMod.renderSettings(host);
+
+  const navBtn = host.querySelector('[data-section="dict-chain"]');
+  assert(navBtn, "Dictionary chain nav button missing");
+  navBtn.click();
+
+  for (let i = 0; i < 20; i++) {
+    await new Promise((r) => setTimeout(r, 0));
+  }
+
+  const langSection = host.querySelector('.chain__lang[data-lang="es"]');
+  assert(langSection, "es chain section missing");
+  const addSelect = langSection.querySelector("select[data-role='add-select']");
+  assert(addSelect, "Add provider select missing for es");
+  const optionNames = Array.from(addSelect.querySelectorAll("option")).map((o) => o.value);
+  // LLM is always addable.
+  assert(optionNames.includes("llm"), `llm missing from Add dropdown: ${optionNames.join(",")}`);
+  // WordNet doesn't support es and isn't installed for es => not addable.
+  assert(!optionNames.includes("wordnet"), `wordnet should not be in Add dropdown for es: ${optionNames.join(",")}`);
+});
+
+// 10) REGRESSION: the Install button on a client-side (browser-side)
+//    dictionary must say "Enable" before the click, "Enabling…"
+//    while the request is in flight, and a success toast afterwards.
+//    The install endpoint is a marker row — no network probe on the
+//    server — so we no longer expect a warning toast from the
+//    server's reachability check.
+await testAsync("REGRESSION: install button shows in-flight feedback and Enable wording", async () => {
+  const settingsMod = await importFresh("../frontend/static/js/pages/settings.js");
+  const stateMod = await import("../frontend/static/js/state.js");
+
+  stateMod.store.set({
+    settings: { active_language: "es", theme: "auto" },
+    languages: [{ code: "es", display_name: "Spanish" }],
+  });
+
+  // Catalog entry: client-side Wiktionary for es.
+  const sample = {
+    ok: true,
+    data: {
+      entries: [
+        {
+          provider: "wiktionary",
+          display_name: "Wiktionary (es)",
+          description: "Browser-side definitions.",
+          languages: ["es"],
+          auto_install: false,
+          source: "online",
+          client_side: true,
+          size_hint: "per-word",
+          installed_languages: [],
+        },
+      ],
+      installed: { es: [] },
+    },
+  };
+  // Server returns a marker-row success with the client_side flag.
+  const installResponse = {
+    ok: true,
+    data: {
+      provider: "wiktionary",
+      language: "es",
+      installed: true,
+      already: false,
+      client_side: true,
+    },
+  };
+  globalThis.fetch = async (url, opts) => {
+    const u = String(url);
+    const method = (opts && opts.method) || "GET";
+    if (u.includes("/api/dictionary/catalog")) {
+      return { ok: true, status: 200, json: async () => sample };
+    }
+    if (u.includes("/api/tts/providers")) {
+      return { ok: true, status: 200, json: async () => ({ ok: true, data: { providers: [] } }) };
+    }
+    if (u.includes("/api/settings")) {
+      return { ok: true, status: 200, json: async () => ({ ok: true, data: stateMod.store.get().settings }) };
+    }
+    if (u.includes("/api/dictionary/install") && method === "POST") {
+      // Defer the response so the test can observe the button label
+      // while the request is in flight.
+      await new Promise((r) => setTimeout(r, 30));
+      return { ok: true, status: 200, json: async () => installResponse };
+    }
+    return { ok: false, status: 404, json: async () => ({ ok: false }) };
+  };
+
+  const toastStack = window.document.getElementById("toast-stack");
+  assert(toastStack, "toast-stack container missing from test DOM");
+
+  for (let i = 0; i < 20; i++) await new Promise((r) => setTimeout(r, 0));
+
+  const host = window.document.getElementById("app-main");
+  host.innerHTML = "";
+  await settingsMod.renderSettings(host);
+
+  const navBtn = host.querySelector('[data-section="dictionaries"]');
+  assert(navBtn, "Offline dictionaries nav button missing");
+  navBtn.click();
+
+  for (let i = 0; i < 20; i++) await new Promise((r) => setTimeout(r, 0));
+
+  // Before the click, the button must read "Enable" — not "Install"
+  // or "Download" — because the catalog entry is client-side.
+  const installBtn = host.querySelector("[data-action='install']");
+  assert(installBtn, "Enable button missing");
+  assert(/Enable/i.test(installBtn.textContent),
+    `expected 'Enable' on the action button, got "${installBtn.textContent}"`);
+
+  installBtn.click();
+
+  // While the install is in flight, the button shows "Enabling…".
+  for (let i = 0; i < 5; i++) await new Promise((r) => setTimeout(r, 0));
+  const inFlight = host.querySelector("[data-action='install']");
+  const inFlightText = inFlight ? inFlight.textContent : "";
+  assert(/Enabling/i.test(inFlightText),
+    `expected 'Enabling…' while in flight, got "${inFlightText}"`);
+
+  // After the install completes, a success toast appears. The
+  // wording matches the client-side action ("enabled", not
+  // "installed").
+  for (let i = 0; i < 30; i++) {
+    await new Promise((r) => setTimeout(r, 0));
+    const success = toastStack.querySelector(".toast--success");
+    if (success) {
+      const titleEl = success.querySelector(".toast__title");
+      const msgEl = success.querySelector(".toast__msg");
+      assert(titleEl && /wiktionary/i.test(titleEl.textContent || ""),
+        `expected title to mention provider, got "${titleEl && titleEl.textContent}"`);
+      assert(msgEl && /browser|fetch/i.test(msgEl.textContent || ""),
+        `expected client-side detail message, got "${msgEl && msgEl.textContent}"`);
+      return;
+    }
+  }
+  assert(false,
+    `expected a .toast--success after install; toast-stack had ${toastStack.children.length} toasts`);
+});
+
+// 11) REGRESSION: the dictionary page's "Looking up…" loading
+//     message must switch to "Checking Wiktionary for …" when
+//     Wiktionary is installed for the active language, so the user
+//     knows the in-flight request is a browser-side network call
+//     rather than a local query. We avoid the word "download" here
+//     because the data lives in the user's browser, not in a
+//     bundled dataset the app is fetching.
+await testAsync("REGRESSION: dictionary loading message names the active provider", async () => {
+  const dictMod = await importFresh("../frontend/static/js/pages/dictionary.js");
+  const stateMod = await import("../frontend/static/js/state.js");
+
+  stateMod.store.set({
+    settings: { active_language: "es", theme: "auto" },
+    languages: [{ code: "es", display_name: "Spanish" }],
+  });
+
+  // Stub fetch: providers (with wiktionary installed for es), then a
+  // slow server-side lookup. The chain walker falls through to the
+  // server only after a client-side miss; the test sets up an empty
+  // chain so the server is reached immediately.
+  let lookupStarted = false;
+  globalThis.fetch = async (url, opts) => {
+    const u = String(url);
+    const method = (opts && opts.method) || "GET";
+    if (u.includes("/api/dictionary/providers?lang=es")) {
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          ok: true,
+          data: {
+            providers: [
+              { name: "wordnet", display_name: "WordNet", kind: "builtin",
+                installed: false, supports: false },
+              { name: "wiktionary", display_name: "Wiktionary", kind: "online",
+                installed: true, supports: true, client_side: true },
+              { name: "llm", display_name: "AI", kind: "ai",
+                installed: true, supports: true, configured: true,
+                provider_kind: "openai-compat" },
+            ],
+            llm_configured: true,
+            llm_provider_kind: "openai-compat",
+          },
+        }),
+      };
+    }
+    if (u.includes("/api/dictionary/suggest")) {
+      return { ok: true, status: 200, json: async () => ({ ok: true, data: { suggestions: [] } }) };
+    }
+    if (u.includes("/api/dictionary/lookup") && method === "POST") {
+      lookupStarted = true;
+      // Hold the request open so we can read the in-flight UI text.
+      await new Promise((r) => setTimeout(r, 100));
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          ok: true,
+          data: {
+            entry: { word: "perro", language: "es", senses: [
+              { pos: "noun", definitions: [{ glossary: "A dog." }], source: "llm" },
+            ], source: "llm" },
+            source: "llm",
+            auto_added: false,
+            providers_in_chain: 0,
+            provider_errors: [],
+            in_vocab: false,
+          },
+        }),
+      };
+    }
+    return { ok: false, status: 404, json: async () => ({ ok: false }) };
+  };
+
+  for (let i = 0; i < 20; i++) await new Promise((r) => setTimeout(r, 0));
+
+  const host = window.document.getElementById("app-main");
+  host.innerHTML = "";
+  await dictMod.renderDictionary(host);
+
+  // Let the providers fetch resolve so providerMeta is populated.
+  for (let i = 0; i < 20; i++) await new Promise((r) => setTimeout(r, 0));
+
+  const input = host.querySelector("#dict-search");
+  assert(input, "dict search input missing");
+  input.value = "perro";
+  const btn = host.querySelector("#dict-search-btn");
+  assert(btn, "dict search button missing");
+  btn.click();
+
+  // Read the in-flight loading text before the lookup resolves.
+  for (let i = 0; i < 5; i++) await new Promise((r) => setTimeout(r, 0));
+  assert(lookupStarted, "expected fetch to /api/dictionary/lookup to start");
+  const resultArea = host.querySelector("#dict-result");
+  const inFlight = resultArea ? resultArea.textContent : "";
+  assert(/Checking.*Wiktionary/i.test(inFlight),
+    `expected 'Checking … Wiktionary' while in flight, got "${inFlight.trim()}"`);
+
+  // Let the lookup complete.
+  for (let i = 0; i < 30; i++) await new Promise((r) => setTimeout(r, 0));
 });
 
 console.log(`\n${passed} passed, ${failures} failed`);

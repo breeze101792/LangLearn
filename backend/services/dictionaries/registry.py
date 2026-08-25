@@ -189,7 +189,8 @@ def bootstrap() -> None:
     """Register built-in providers. Called once at app startup."""
     if PROVIDERS:
         return
-    from . import llm as llm_provider, wordnet as wordnet_provider
+    from . import llm as llm_provider
+    from . import wordnet as wordnet_provider
 
     register("wordnet", wordnet_provider.lookup, supports=wordnet_provider.supports)
     register("llm", llm_provider.lookup, supports=llm_provider.supports)

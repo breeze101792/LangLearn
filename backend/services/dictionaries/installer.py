@@ -8,6 +8,13 @@ WordNet for English is the one auto-install: on first app boot we ensure
 the row exists so the lookup code path is identical between fresh
 installs and existing users. Other languages start uninstalled and the
 user pulls them in through the Settings UI.
+
+The install row is a marker: the install endpoint never touches the
+network itself. For offline providers (WordNet) the data is bundled
+with NLTK and arrives on first lookup. For online providers
+(Wiktionary, browser-side) the install row just enables the client-side
+service; the network call happens in the user's browser when they
+look up a word.
 """
 
 from __future__ import annotations
@@ -29,7 +36,7 @@ class InstallResult:
     language: str
     installed: bool        # True when the install row exists after this call
     already: bool          # True when no change happened (idempotent re-run)
-    source: str            # mirrors catalog entry, e.g. "bundled"
+    client_side: bool      # True for browser-side providers (Wiktionary)
 
 
 def is_installed(provider: str, language: str) -> bool:
@@ -91,10 +98,13 @@ def install(provider: str, language: str) -> InstallResult:
     """Mark ``provider`` as installed for ``language``. Idempotent.
 
     Raises ``ValueError`` for unknown catalog pairs (no silent success).
-    The actual data fetch / disk write is delegated to the provider's own
-    install hook in the future — for v1 WordNet is the only provider and
-    it's already downloaded by NLTK at first lookup, so the install is
-    purely the marker row.
+
+    This is a marker row: the install endpoint never touches the
+    network. For server-side providers the data lives on the server
+    (WordNet arrives with NLTK at first lookup). For client-side
+    providers the install row only enables the browser-side service;
+    the network call happens in the user's browser when they look up
+    a word.
     """
     entry = catalog_mod.find(provider, language)
     if entry is None:
@@ -102,7 +112,7 @@ def install(provider: str, language: str) -> InstallResult:
     if is_installed(provider, language):
         return InstallResult(
             provider=provider, language=language,
-            installed=True, already=True, source=entry.source,
+            installed=True, already=True, client_side=entry.client_side,
         )
     return _insert(provider, language)
 
@@ -124,7 +134,7 @@ def uninstall(provider: str, language: str) -> bool:
 
 def _insert(provider: str, language: str) -> InstallResult:
     entry = catalog_mod.find(provider, language)
-    source = entry.source if entry is not None else "unknown"
+    client_side = entry.client_side if entry is not None else False
     with get_conn() as conn:
         conn.execute(
             "INSERT OR IGNORE INTO installed_dictionaries (provider, language)"
@@ -133,7 +143,7 @@ def _insert(provider: str, language: str) -> InstallResult:
         )
     return InstallResult(
         provider=provider, language=language,
-        installed=True, already=False, source=source,
+        installed=True, already=False, client_side=client_side,
     )
 
 
@@ -142,7 +152,9 @@ def catalog_view(language: str | None = None) -> list[dict]:
 
     When ``language`` is given, each entry exposes ``installed`` for that
     language only. When None, ``installed_languages`` lists which of the
-    catalog entry's languages have it installed.
+    catalog entry's languages have it installed. The ``client_side`` flag
+    is preserved on every item so the UI can badge online-vs-bundled
+    providers and the dictionary page can dispatch client-side steps.
     """
     by_lang: dict[str, set[str]] = installed_providers()  # type: ignore[assignment]
     out: list[dict] = []
@@ -154,6 +166,7 @@ def catalog_view(language: str | None = None) -> list[dict]:
             "languages": list(entry.languages),
             "auto_install": entry.auto_install,
             "source": entry.source,
+            "client_side": entry.client_side,
             "size_hint": entry.size_hint,
         }
         if language is not None:
