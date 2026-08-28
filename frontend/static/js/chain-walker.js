@@ -92,6 +92,11 @@ export async function runChain({ word, lang, chain, api, clientSideMap }) {
     return res.data || { entry: null, source: "", provider_errors: [], providers_in_chain: 0 };
   }
 
+  // Errors from client-side providers we've already attempted. They
+  // ride along on whichever envelope finally answers so the page can
+  // still show why Wiktionary contributed nothing.
+  const clientErrors = [];
+
   for (let i = 0; i < chain.length; i++) {
     const step = chain[i];
     if (!step || !step.name) continue;
@@ -107,11 +112,15 @@ export async function runChain({ word, lang, chain, api, clientSideMap }) {
       try {
         const result = await service.lookup(word, lang);
         if (result && result.entry) {
-          return envelopeFromClientHit(step.name, result);
+          const envelope = envelopeFromClientHit(step.name, result);
+          if (clientErrors.length > 0) envelope.provider_errors = clientErrors;
+          return envelope;
         }
         // Miss — try the next step in the chain.
       } catch (e) {
-        return envelopeFromClientError(step.name, word, lang, e);
+        // A failed browser-side fetch (offline, blocked, CORS) must
+        // not kill the rest of the chain: record and fall through.
+        clientErrors.push({ provider: step.name, error: String(e) });
       }
       continue;
     }
@@ -124,16 +133,25 @@ export async function runChain({ word, lang, chain, api, clientSideMap }) {
       .filter((s) => s && s.name && !isClientSideProvider(s.name, clientSideMap))
       .map((s) => ({ name: s.name, enabled: s.enabled !== false }));
     if (rest.length === 0) {
-      return { entry: null, source: "", provider_errors: [], providers_in_chain: 0 };
+      return { entry: null, source: "", provider_errors: clientErrors, providers_in_chain: 0 };
     }
     const res = await api.post("/api/dictionary/lookup", { lang, word, chain: rest });
     if (!res.ok) {
-      return envelopeFromClientError(rest[0].name, word, lang, res.error || "lookup failed");
+      const envelope = envelopeFromClientError(rest[0].name, word, lang, res.error || "lookup failed");
+      envelope.provider_errors = [...clientErrors, ...envelope.provider_errors];
+      return envelope;
     }
-    return res.data || { entry: null, source: "" };
+    const data = res.data || { entry: null, source: "" };
+    if (clientErrors.length > 0) {
+      data.provider_errors = [
+        ...clientErrors,
+        ...(Array.isArray(data.provider_errors) ? data.provider_errors : []),
+      ];
+    }
+    return data;
   }
 
-  return { entry: null, source: "", provider_errors: [], providers_in_chain: 0 };
+  return { entry: null, source: "", provider_errors: clientErrors, providers_in_chain: 0 };
 }
 
 /**
