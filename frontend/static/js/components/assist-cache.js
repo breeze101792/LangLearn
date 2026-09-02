@@ -27,7 +27,7 @@
 // textarea payload times hundreds of entries would blow past that. A
 // 40-char hex digest keeps the key length bounded.
 
-const NAMESPACE = "langlearn:assist:v1";
+const NAMESPACE = "langlearn:assist:v2";
 const MAX_ENTRIES = 200;
 
 // Public so tests can seed the namespace without recreating the prefix.

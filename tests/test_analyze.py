@@ -61,6 +61,17 @@ def test_analyze_text_happy_path(fresh, monkeypatch):
                 "explanation_secondary": "寧可。",
             },
         ],
+        "analysis": {
+            "explanation": "The sentence expresses a preference between two options.",
+            "alternatives": [
+                {
+                    "text": "She'd sooner stay home than go out in the rain.",
+                    "nuance": "More informal.",
+                },
+            ],
+            "translation_primary": "她寧可待在家，也不願冒雨出門。",
+            "translation_secondary": "她寧可待在家，也不願冒雨出門。",
+        },
     }
 
     def fake_post(url, json=None, headers=None, timeout=None):
@@ -74,6 +85,73 @@ def test_analyze_text_happy_path(fresh, monkeypatch):
     assert out["structures"][0]["pattern"] == "would rather X than Y"
     assert out["phrases"][0]["phrase"] == "stay home"
     assert out["words"][0]["word"] == "rather"
+    assert out["analysis"]["explanation"].startswith("The sentence expresses")
+    assert out["analysis"]["alternatives"][0]["text"].startswith("She'd sooner")
+    # primary == target language, so the native translation is redundant
+    # and must be nulled out by apply_explanation_rules.
+    assert out["analysis"]["translation_primary"] is None
+
+
+def test_analyze_keeps_analysis_translation_when_primary_differs(fresh, monkeypatch):
+    """When the user's primary native differs from the target language,
+    ``analysis.translation_primary`` survives the explanation rules."""
+    from backend.services import llm
+
+    payload = {
+        "structures": [],
+        "phrases": [],
+        "words": [],
+        "analysis": {
+            "explanation": "Expresses a preference.",
+            "alternatives": [{"text": "She'd sooner stay home.", "nuance": "Informal."}],
+            "translation_primary": "她寧可待在家。",
+            "translation_secondary": None,
+        },
+    }
+
+    def fake_post(url, json=None, headers=None, timeout=None):
+        return _mock_openai_response(_json.dumps(payload))
+
+    monkeypatch.setattr("backend.services.llm.requests.post", fake_post)
+    out = llm.analyze_text_via_llm(
+        lang="en", text="She would rather stay home.",
+        primary="zh", secondary=None,
+    )
+    assert out["analysis"]["translation_primary"] == "她寧可待在家。"
+    assert out["analysis"]["translation_secondary"] is None
+
+
+def test_analyze_normalizes_analysis_aliases(fresh, monkeypatch):
+    """The normalizer should repair common field-name variants the model
+    produces for the ``analysis`` block so strict validation passes."""
+    from backend.services import llm
+
+    payload = {
+        "structures": [],
+        "phrases": [],
+        "words": [],
+        "analysis": {
+            "summary": "Expresses a preference.",
+            "native_alternatives": [
+                {"sentence": "She'd sooner stay home.", "note": "Informal."},
+            ],
+            "translation": "她寧可待在家。",
+        },
+    }
+
+    def fake_post(url, json=None, headers=None, timeout=None):
+        return _mock_openai_response(_json.dumps(payload))
+
+    monkeypatch.setattr("backend.services.llm.requests.post", fake_post)
+    out = llm.analyze_text_via_llm(
+        lang="en", text="She would rather stay home.",
+        primary="zh", secondary=None,
+    )
+    analysis = out["analysis"]
+    assert analysis["explanation"] == "Expresses a preference."
+    assert analysis["alternatives"][0]["text"] == "She'd sooner stay home."
+    assert analysis["alternatives"][0]["nuance"] == "Informal."
+    assert analysis["translation_primary"] == "她寧可待在家。"
 
 
 def test_analyze_text_nulls_redundant_primary(fresh, monkeypatch):

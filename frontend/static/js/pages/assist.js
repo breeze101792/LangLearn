@@ -401,8 +401,9 @@ function renderAnalyzePage(host) {
     const structures = data.structures || [];
     const phrases = data.phrases || [];
     const words = data.words || [];
+    const analysis = data.analysis || null;
     const total = structures.length + phrases.length + words.length;
-    if (total === 0) {
+    if (total === 0 && !analysis) {
       host.innerHTML = `
         <div class="empty-state">
           <div class="empty-state__icon">🪶</div>
@@ -417,6 +418,7 @@ function renderAnalyzePage(host) {
         <div class="row" style="justify-content: flex-end; margin-bottom: var(--sp-2)">
           <button type="button" class="btn btn--sm btn--ghost" data-action="regenerate" title="Re-run the analysis with the same text">↻ Regenerate</button>
         </div>
+        ${analysis ? renderAnalysis(analysis) : ""}
         ${structures.length ? section("Sentence structures", structures.map((s, i) => renderStructure(s, i)).join("")) : ""}
         ${phrases.length ? section("Phrases & expressions", phrases.map((p, i) => renderPhrase(p, i)).join("")) : ""}
         ${words.length ? section("Difficult words", words.map((w, i) => renderWord(w, i)).join("")) : ""}
@@ -434,6 +436,36 @@ function renderAnalyzePage(host) {
     });
     const regen = host.querySelector("button[data-action='regenerate']");
     if (regen) regen.addEventListener("click", onRegenerate);
+  }
+
+  function renderAnalysis(a) {
+    const explanation = a.explanation || "";
+    const alternatives = a.alternatives || [];
+    const translationPrimary = a.translation_primary || null;
+    const translationSecondary = a.translation_secondary || null;
+    return `
+      <section class="analyze-section">
+        <h2 class="analyze-section__title">Analysis</h2>
+        <div class="card refine-card">
+          <p class="refine-card__text">${escapeHtml(explanation)}</p>
+          ${translationPrimary ? `<p class="refine-card__native"><span class="list-item__meta-label">${escapeHtml(langDisplayName(primary, languages))}:</span> ${escapeHtml(translationPrimary)}</p>` : ""}
+          ${translationSecondary ? `<p class="refine-card__native"><span class="list-item__meta-label">${escapeHtml(langDisplayName(secondary, languages))}:</span> ${escapeHtml(translationSecondary)}</p>` : ""}
+        </div>
+        ${alternatives.length ? `
+          <div class="translate-alts-wrap">
+            <h3 class="translate-subtitle">Other ways a native would say it</h3>
+            <ul class="translate-alts">
+              ${alternatives.map((a) => `
+                <li>
+                  <span class="translate-alts__text">${escapeHtml(a.text || "")}</span>
+                  ${a.nuance ? `<span class="translate-alts__nuance field__hint">${escapeHtml(a.nuance)}</span>` : ""}
+                </li>
+              `).join("")}
+            </ul>
+          </div>
+        ` : ""}
+      </section>
+    `;
   }
 
   function renderStructure(s, i) {

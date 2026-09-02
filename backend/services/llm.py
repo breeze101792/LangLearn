@@ -210,6 +210,14 @@ def apply_explanation_rules(
         for w in (payload.get("words") or []):
             if isinstance(w, dict):
                 _strip_explanations(w, keep_primary=keep_p, keep_secondary=keep_s)
+        # The whole-text analysis carries native-language translations of
+        # the input; null them out under the same rules.
+        analysis = payload.get("analysis")
+        if isinstance(analysis, dict):
+            if not keep_p:
+                analysis["translation_primary"] = None
+            if not keep_s:
+                analysis["translation_secondary"] = None
         return
     if "explanation_primary" in payload or "explanation_secondary" in payload:
         _strip_explanations(
@@ -1362,6 +1370,28 @@ ANALYZE_SCHEMA: dict = {
                 },
             },
         },
+        "analysis": {
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["explanation", "alternatives"],
+            "properties": {
+                "explanation": {"type": "string", "minLength": 1, "maxLength": 1500},
+                "alternatives": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "additionalProperties": False,
+                        "required": ["text", "nuance"],
+                        "properties": {
+                            "text": {"type": "string", "minLength": 1, "maxLength": 1000},
+                            "nuance": {"type": ["string", "null"], "maxLength": 500},
+                        },
+                    },
+                },
+                "translation_primary": {"type": ["string", "null"], "maxLength": 2000},
+                "translation_secondary": {"type": ["string", "null"], "maxLength": 2000},
+            },
+        },
     },
 }
 
@@ -1396,23 +1426,55 @@ def _build_analyze_user_prompt(
         f"  it used in context (in {target_name}).",
         "",
         f"All example_sentence / phrase / example values must be in {target_name}.",
+        "",
+        "Also produce a top-level `analysis` object covering the WHOLE input as",
+        "one block. It has three parts:",
+        f"- `explanation`: a short paragraph in {target_name} analyzing the whole",
+        f"  text — the main construction, what it expresses, and any nuance a",
+        f"  learner should notice. 2-4 sentences.",
+        f"- `alternatives`: 2-3 other natural ways a native speaker of",
+        f"  {target_name} would say the SAME thing, in different registers or",
+        f"  occasions. Each is an object with `text` (the alternative sentence,",
+        f"  in {target_name}) and `nuance` (a short note in {target_name} on how",
+        f"  the register, word choice, or tone differs). Order most natural first.",
+        f"- `translation_primary` / `translation_secondary`: a translation of the",
+        f"  whole input into the user's native language(s), so a native speaker",
+        f"  can read the meaning directly.",
     ]
     if keep_primary:
         parts.append(
-            f"For each item, include explanation_primary in {primary_name} (a short"
-            f" translation or note for a reader who doesn't speak {target_name})."
+            f"For each structure, phrase, and word, include explanation_primary"
+            f" in {primary_name} (a short translation or note for a reader who"
+            f" doesn't speak {target_name})."
         )
     else:
         parts.append(
-            f"Do NOT include explanation_primary: the target language "
+            f"Do NOT include explanation_primary on items: the target language "
             f"({target_name}) already shows the item itself."
         )
     if keep_secondary:
         parts.append(
-            f"For each item, include explanation_secondary in {secondary_name}."
+            f"For each structure, phrase, and word, include explanation_secondary"
+            f" in {secondary_name}."
         )
     else:
-        parts.append("Do NOT include explanation_secondary.")
+        parts.append("Do NOT include explanation_secondary on items.")
+    if keep_primary:
+        parts.append(
+            f"Also include `analysis.translation_primary`: a natural translation"
+            f" of the whole input into {primary_name}."
+        )
+    else:
+        parts.append(
+            f"Do NOT include `analysis.translation_primary`: the target language"
+            f" ({target_name}) already shows the text itself."
+        )
+    if keep_secondary:
+        parts.append(
+            f"Also include `analysis.translation_secondary` in {secondary_name}."
+        )
+    else:
+        parts.append("Do NOT include `analysis.translation_secondary`.")
     parts.append(
         "If the input is too short or too simple to extract useful items,"
         " return empty arrays (not invented content)."
@@ -1429,6 +1491,10 @@ def _normalize_analyze(data: dict) -> dict:
     - drop `definitions` / `meanings` from word items (the schema only
       allows `glossary`).
     - structures/phrases: drop any unknown keys so strict validation passes.
+    - `analysis`: alias `summary` -> `explanation`, `native_alternatives` /
+      `ways` -> `alternatives`, `translation` -> `translation_primary`; per
+      alternative alias `sentence` / `option` -> `text`, `note` / `why` ->
+      `nuance`; drop unknown keys.
     """
     for kind in ("structures", "phrases"):
         for item in (data.get(kind) or []):
@@ -1459,7 +1525,62 @@ def _normalize_analyze(data: dict) -> dict:
                 "explanation_primary", "explanation_secondary",
             ):
                 w.pop(key, None)
+    _normalize_analyze_analysis(data)
     return data
+
+
+def _normalize_analyze_analysis(data: dict) -> None:
+    """Repair the top-level ``analysis`` object in an analyze payload.
+    Must never raise: runs before strict validation on every attempt.
+
+    - `summary` / `overview` -> `explanation`
+    - `native_alternatives` / `ways` / `options` -> `alternatives`
+    - `translation` -> `translation_primary`
+    - per alternative: `sentence` / `option` / `alternative` -> `text`;
+      `note` / `why` / `comment` -> `nuance`
+    - unknown keys dropped.
+    """
+    analysis = data.get("analysis")
+    if not isinstance(analysis, dict):
+        return
+    if "explanation" not in analysis:
+        for alias in ("summary", "overview", "analysis"):
+            if alias in analysis:
+                analysis["explanation"] = analysis.pop(alias)
+                break
+    if "alternatives" not in analysis:
+        for alias in ("native_alternatives", "ways", "options", "alts"):
+            if alias in analysis:
+                analysis["alternatives"] = analysis.pop(alias)
+                break
+    if "translation_primary" not in analysis and "translation" in analysis:
+        analysis["translation_primary"] = analysis.pop("translation")
+    for alt in (analysis.get("alternatives") or []):
+        if not isinstance(alt, dict):
+            continue
+        if "text" not in alt:
+            for alias in ("sentence", "option", "alternative", "value"):
+                if alias in alt:
+                    alt["text"] = alt.pop(alias)
+                    break
+        if "nuance" not in alt:
+            for alias in ("note", "why", "comment", "reason", "gloss"):
+                if alias in alt:
+                    alt["nuance"] = alt.pop(alias)
+                    break
+        for key in list(alt):
+            if key not in ("text", "nuance"):
+                alt.pop(key, None)
+        if not isinstance(alt.get("text"), str):
+            alt["text"] = "" if alt.get("text") is None else str(alt["text"])
+        if not isinstance(alt.get("nuance"), str):
+            alt["nuance"] = None if alt.get("nuance") is None else str(alt["nuance"])
+    for key in list(analysis):
+        if key not in (
+            "explanation", "alternatives",
+            "translation_primary", "translation_secondary",
+        ):
+            analysis.pop(key, None)
 
 
 def analyze_text_via_llm(
@@ -1469,12 +1590,15 @@ def analyze_text_via_llm(
     level: str | None = None,
 ) -> dict:
     """Ask the LLM to extract structures, phrases, and hard words from
-    ``text`` (in ``lang``). Returns the parsed dict matching
-    :data:`ANALYZE_SCHEMA`. The same explanation-language rules used
-    elsewhere apply (see :data:`_should_generate_primary` and friends):
-    ``explanation_primary`` is nulled out when the target language equals
-    the user's primary native, and ``explanation_secondary`` is nulled
-    out when it would be redundant with primary or unset.
+    ``text`` (in ``lang``), plus a whole-text ``analysis`` block. Returns
+    the parsed dict matching :data:`ANALYZE_SCHEMA`. The same
+    explanation-language rules used elsewhere apply (see
+    :data:`_should_generate_primary` and friends): ``explanation_primary``
+    is nulled out when the target language equals the user's primary
+    native, and ``explanation_secondary`` is nulled out when it would be
+    redundant with primary or unset. The ``analysis`` block's
+    ``translation_primary`` / ``translation_secondary`` follow the same
+    rules.
 
     Raises :class:`LLMError` on network or schema failures.
     """
